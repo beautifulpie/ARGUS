@@ -35,6 +35,7 @@ class ServiceConfig:
     uav_threshold: float = 35.0
     feature_window_ms: int = 2000
     model_path: str = ""
+    active_model_id: str = "heuristic-default"
 
     @classmethod
     def from_env(cls) -> "ServiceConfig":
@@ -50,6 +51,7 @@ class ServiceConfig:
             uav_threshold=_to_float(os.getenv("RADAR_UAV_THRESHOLD"), 35.0),
             feature_window_ms=_to_int(os.getenv("RADAR_FEATURE_WINDOW_MS"), 2000),
             model_path=os.getenv("RADAR_MODEL_PATH", ""),
+            active_model_id=os.getenv("RADAR_ACTIVE_MODEL_ID", "heuristic-default"),
         )
 
     def to_dict(self) -> dict:
@@ -63,6 +65,7 @@ class ServiceConfig:
             "uavThreshold": self.uav_threshold,
             "featureWindowMs": self.feature_window_ms,
             "modelPath": self.model_path,
+            "activeModelId": self.active_model_id,
         }
 
     def apply_patch(self, patch: dict) -> None:
@@ -80,3 +83,5 @@ class ServiceConfig:
             self.feature_window_ms = max(200, int(patch["featureWindowMs"]))
         if "modelPath" in patch:
             self.model_path = str(patch["modelPath"] or "")
+        if "activeModelId" in patch:
+            self.active_model_id = str(patch["activeModelId"] or "heuristic-default")

@@ -52,6 +52,8 @@ const loadRuntimeConfig = () => {
     pollIntervalMs: 100,
     requestTimeoutMs: 1000,
     uavThreshold: 35,
+    modelPath: '',
+    activeModelId: 'heuristic-default',
   };
 
   const configPath = getRuntimeConfigPath();
@@ -82,6 +84,8 @@ let runtimeConfig = {
   pollIntervalMs: 100,
   requestTimeoutMs: 1000,
   uavThreshold: 35,
+  modelPath: '',
+  activeModelId: 'heuristic-default',
 };
 
 const inferHealthUrl = () => `http://127.0.0.1:${runtimeConfig.inferPort}/healthz`;
@@ -175,6 +179,8 @@ const startInferenceService = () => {
       RADAR_POLL_INTERVAL_MS: String(runtimeConfig.pollIntervalMs),
       RADAR_REQUEST_TIMEOUT_MS: String(runtimeConfig.requestTimeoutMs),
       RADAR_UAV_THRESHOLD: String(runtimeConfig.uavThreshold),
+      RADAR_MODEL_PATH: String(runtimeConfig.modelPath || ''),
+      RADAR_ACTIVE_MODEL_ID: String(runtimeConfig.activeModelId || 'heuristic-default'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

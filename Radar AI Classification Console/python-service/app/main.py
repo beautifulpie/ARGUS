@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 # Keep script executable directly: python3 python-service/app/main.py
@@ -102,6 +102,17 @@ class ConfigPatch(BaseModel):
     uavThreshold: float | None = None
     featureWindowMs: int | None = None
     modelPath: str | None = None
+    activeModelId: str | None = None
+
+
+class ModelRegisterRequest(BaseModel):
+    modelId: str
+    modelPath: str
+    activate: bool = True
+
+
+class ModelActivateRequest(BaseModel):
+    modelId: str
 
 
 class ServiceState:
@@ -111,6 +122,7 @@ class ServiceState:
             threshold=config.uav_threshold,
             feature_window_ms=config.feature_window_ms,
             model_path=config.model_path,
+            active_model_id=config.active_model_id,
         )
         self.last_frame: dict[str, Any] = {
             "objects": [],
@@ -127,6 +139,16 @@ class ServiceState:
         self.inference_ms_history: deque[float] = deque(maxlen=300)
         self.pipeline_ms_history: deque[float] = deque(maxlen=300)
         self.last_polled_at = 0.0
+        self._sync_model_config()
+
+    def _sync_model_config(self) -> None:
+        active_model_id = self.inferencer.active_model_id
+        self.config.active_model_id = active_model_id
+        self.config.model_path = ""
+        for model in self.inferencer.list_models():
+            if model["modelId"] == active_model_id:
+                self.config.model_path = model["modelPath"] or ""
+                break
 
     def _build_status(
         self,
@@ -326,19 +348,69 @@ class ServiceState:
             return {
                 "status": "ok" if self.source_connected else "degraded",
                 "sourceConnected": self.source_connected,
+                "activeModelId": self.inferencer.active_model_id,
                 "modelVersion": self.inferencer.model_version,
                 "uptimeSec": int(time.time() - self.start_ts),
                 "lastPolledAt": self.last_polled_at,
                 "lastError": self.last_error,
+                "models": self.inferencer.list_models(),
                 "config": self.config.to_dict(),
                 "queueDepth": 0,
             }
 
+    async def list_models(self) -> dict[str, Any]:
+        async with self.lock:
+            return {
+                "activeModelId": self.inferencer.active_model_id,
+                "models": self.inferencer.list_models(),
+            }
+
+    async def register_model(self, model_id: str, model_path: str, activate: bool) -> dict[str, Any]:
+        async with self.lock:
+            descriptor = self.inferencer.register_joblib_model(model_id, model_path, activate=activate)
+            self._sync_model_config()
+            return {
+                "registered": descriptor,
+                "activeModelId": self.inferencer.active_model_id,
+                "models": self.inferencer.list_models(),
+            }
+
+    async def activate_model(self, model_id: str) -> dict[str, Any]:
+        async with self.lock:
+            self.inferencer.activate_model(model_id)
+            self._sync_model_config()
+            return {
+                "activeModelId": self.inferencer.active_model_id,
+                "models": self.inferencer.list_models(),
+            }
+
+    async def unregister_model(self, model_id: str) -> dict[str, Any]:
+        async with self.lock:
+            self.inferencer.unregister_model(model_id)
+            self._sync_model_config()
+            return {
+                "activeModelId": self.inferencer.active_model_id,
+                "models": self.inferencer.list_models(),
+            }
+
     async def reload(self, patch: dict[str, Any]) -> dict[str, Any]:
-        self.config.apply_patch(patch)
-        self.inferencer.update_threshold(self.config.uav_threshold)
-        self.inferencer.update_feature_window(self.config.feature_window_ms)
-        return self.config.to_dict()
+        async with self.lock:
+            self.config.apply_patch(patch)
+            self.inferencer.update_threshold(self.config.uav_threshold)
+            self.inferencer.update_feature_window(self.config.feature_window_ms)
+
+            if "modelPath" in patch:
+                model_path = str(patch["modelPath"] or "").strip()
+                if model_path:
+                    self.inferencer.load_legacy_model_path(model_path, activate=True)
+
+            if "activeModelId" in patch:
+                active_model_id = str(patch["activeModelId"] or "").strip()
+                if active_model_id:
+                    self.inferencer.activate_model(active_model_id)
+
+            self._sync_model_config()
+            return self.config.to_dict()
 
 
 config = ServiceConfig.from_env()
@@ -368,8 +440,47 @@ async def radar_frame() -> dict[str, Any]:
 
 @app.post("/api/v1/config/reload")
 async def reload_config(patch: ConfigPatch) -> dict[str, Any]:
-    applied = await state.reload(patch.model_dump(exclude_none=True))
+    try:
+        applied = await state.reload(patch.model_dump(exclude_none=True))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return {"ok": True, "config": applied}
+
+
+@app.get("/api/v1/models")
+async def list_models() -> dict[str, Any]:
+    return await state.list_models()
+
+
+@app.post("/api/v1/models/register")
+async def register_model(payload: ModelRegisterRequest) -> dict[str, Any]:
+    try:
+        result = await state.register_model(
+            model_id=payload.modelId,
+            model_path=payload.modelPath,
+            activate=payload.activate,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"ok": True, **result}
+
+
+@app.post("/api/v1/models/activate")
+async def activate_model(payload: ModelActivateRequest) -> dict[str, Any]:
+    try:
+        result = await state.activate_model(payload.modelId)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"ok": True, **result}
+
+
+@app.delete("/api/v1/models/{model_id}")
+async def unregister_model(model_id: str) -> dict[str, Any]:
+    try:
+        result = await state.unregister_model(model_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"ok": True, **result}
 
 
 if __name__ == "__main__":

@@ -23,6 +23,11 @@
 
   Default service URL: `http://127.0.0.1:8787`
 
+  Model hot-swap is supported in the Python service:
+  - register/list/activate/remove models with `/api/v1/models*` endpoints
+  - keep `heuristic-default` as safe fallback
+  - optional startup envs: `RADAR_MODEL_PATH`, `RADAR_ACTIVE_MODEL_ID`
+
   ## Electron app mode
 
   Electron runs the web console and starts the Python service as a child process.

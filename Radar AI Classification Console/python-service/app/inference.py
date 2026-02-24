@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -20,34 +21,144 @@ class TrackObservation:
     confidence: float
 
 
+@dataclass
+class LoadedModel:
+    model_id: str
+    model_type: str
+    model_version: str
+    model_path: str
+    loaded_at: str
+    predictor: Any | None = None
+
+
 class UavBinaryInferencer:
-    def __init__(self, threshold: float, feature_window_ms: int, model_path: str = "") -> None:
+    def __init__(
+        self,
+        threshold: float,
+        feature_window_ms: int,
+        model_path: str = "",
+        active_model_id: str = "heuristic-default",
+    ) -> None:
         self.threshold = threshold
         self.feature_window_ms = feature_window_ms
         self._buffers: dict[str, deque[TrackObservation]] = defaultdict(deque)
-        self._model = None
-        self.model_version = "heuristic-uav-v1"
-        self._load_optional_model(model_path)
+        self._models: dict[str, LoadedModel] = {}
+        self._active_model_id = "heuristic-default"
+        self._register_heuristic_model("heuristic-default", activate=True)
 
-    def _load_optional_model(self, model_path: str) -> None:
-        if not model_path:
-            return
-        path = Path(model_path)
-        if not path.exists():
-            return
-        try:
-            joblib = importlib.import_module("joblib")
-            self._model = joblib.load(path)
-            self.model_version = f"joblib:{path.name}"
-        except Exception:
-            self._model = None
-            self.model_version = "heuristic-uav-v1"
+        if model_path:
+            self.register_joblib_model("env-model", model_path, activate=True)
+
+        if active_model_id:
+            try:
+                self.activate_model(active_model_id)
+            except ValueError:
+                self.activate_model("heuristic-default")
 
     def update_threshold(self, threshold: float) -> None:
         self.threshold = threshold
 
     def update_feature_window(self, feature_window_ms: int) -> None:
         self.feature_window_ms = feature_window_ms
+
+    @property
+    def active_model_id(self) -> str:
+        return self._active_model_id
+
+    @property
+    def model_version(self) -> str:
+        return self._get_active_model().model_version
+
+    def list_models(self) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for model in self._models.values():
+            entries.append(
+                {
+                    "modelId": model.model_id,
+                    "modelType": model.model_type,
+                    "modelVersion": model.model_version,
+                    "modelPath": model.model_path,
+                    "loadedAt": model.loaded_at,
+                    "active": model.model_id == self._active_model_id,
+                }
+            )
+        return sorted(entries, key=lambda item: item["modelId"])
+
+    def activate_model(self, model_id: str) -> None:
+        if model_id not in self._models:
+            raise ValueError(f"model not found: {model_id}")
+        self._active_model_id = model_id
+
+    def register_joblib_model(self, model_id: str, model_path: str, activate: bool = True) -> dict[str, Any]:
+        model_id = model_id.strip()
+        if not model_id:
+            raise ValueError("model_id must not be empty")
+        path = Path(model_path).expanduser().resolve()
+        if not path.exists():
+            raise ValueError(f"model path does not exist: {path}")
+
+        try:
+            joblib = importlib.import_module("joblib")
+            predictor = joblib.load(path)
+        except Exception as error:
+            raise ValueError(f"failed to load joblib model: {error}") from error
+
+        self._models[model_id] = LoadedModel(
+            model_id=model_id,
+            model_type="joblib",
+            model_version=f"joblib:{path.name}",
+            model_path=str(path),
+            loaded_at=datetime.now(timezone.utc).isoformat(),
+            predictor=predictor,
+        )
+        if activate:
+            self.activate_model(model_id)
+        return self._model_descriptor(model_id)
+
+    def unregister_model(self, model_id: str) -> None:
+        if model_id not in self._models:
+            raise ValueError(f"model not found: {model_id}")
+        if model_id == "heuristic-default":
+            raise ValueError("heuristic-default model cannot be removed")
+
+        del self._models[model_id]
+        if self._active_model_id == model_id:
+            self._active_model_id = "heuristic-default"
+
+    def load_legacy_model_path(self, model_path: str, activate: bool = True) -> dict[str, Any]:
+        return self.register_joblib_model("runtime-model", model_path, activate=activate)
+
+    def _register_heuristic_model(self, model_id: str, activate: bool = False) -> None:
+        self._models[model_id] = LoadedModel(
+            model_id=model_id,
+            model_type="heuristic",
+            model_version="heuristic-uav-v1",
+            model_path="",
+            loaded_at=datetime.now(timezone.utc).isoformat(),
+            predictor=None,
+        )
+        if activate:
+            self._active_model_id = model_id
+
+    def _get_active_model(self) -> LoadedModel:
+        model = self._models.get(self._active_model_id)
+        if model is None:
+            self._active_model_id = "heuristic-default"
+            model = self._models[self._active_model_id]
+        return model
+
+    def _model_descriptor(self, model_id: str) -> dict[str, Any]:
+        if model_id not in self._models:
+            raise ValueError(f"model not found: {model_id}")
+        model = self._models[model_id]
+        return {
+            "modelId": model.model_id,
+            "modelType": model.model_type,
+            "modelVersion": model.model_version,
+            "modelPath": model.model_path,
+            "loadedAt": model.loaded_at,
+            "active": model.model_id == self._active_model_id,
+        }
 
     def observe(self, track_id: str, observation: TrackObservation) -> dict[str, Any]:
         buffer = self._buffers[track_id]
@@ -78,10 +189,11 @@ class UavBinaryInferencer:
         if not buffer:
             return 0.0
 
-        if self._model is not None:
+        active_model = self._get_active_model()
+        if active_model.model_type == "joblib" and active_model.predictor is not None:
             feature_vector = self._build_feature_vector(buffer)
             try:
-                probability = float(self._model.predict_proba([feature_vector])[0][1]) * 100
+                probability = float(active_model.predictor.predict_proba([feature_vector])[0][1]) * 100
                 return max(0.0, min(100.0, probability))
             except Exception:
                 pass
