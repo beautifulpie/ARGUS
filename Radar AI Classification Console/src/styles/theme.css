@@ -179,3 +179,722 @@
     line-height: 1.5;
   }
 }
+
+.argus-root[data-theme='LIGHT'] .argus-surface {
+  background-color: #f5f8fc !important;
+  color: #0f172a !important;
+  box-shadow: none !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='border-cyan-'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='border-gray-'] {
+  border-color: rgba(148, 163, 184, 0.68) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0a0d12]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0b1016]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0b0f14]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0c1219]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0c131c]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0d131b]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0f161f]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#111827]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#111826]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#111a24]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0a131d]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0b141d]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0d1721]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#09121a]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0f1520]'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-gray-900'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-gray-800'] {
+  background-color: #eef3f8 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0c131c]'] {
+  background-color: #ffffff !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-[#0a131d]'] {
+  background-color: #f8fbff !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='hover:bg-[#102030]']:hover,
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='hover:bg-[#122131]']:hover,
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='hover:bg-[#182838]']:hover,
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='hover:bg-[#1a2836]']:hover {
+  background-color: #e7eef7 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-cyan-950'] {
+  background-color: rgba(6, 182, 212, 0.12) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-gray-100'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-gray-200'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-gray-300'] {
+  color: #0f172a !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-slate-100'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-slate-200'] {
+  color: #0f172a !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-slate-300'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-slate-400'] {
+  color: #334155 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-slate-500'] {
+  color: #475569 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-gray-400'] {
+  color: #334155 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-gray-500'] {
+  color: #475569 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-gray-600'] {
+  color: #64748b !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-cyan-200'] {
+  color: #0b5f79 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-cyan-300'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-cyan-400'] {
+  color: #0e7490 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-amber-'] {
+  color: #92400e !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-emerald-'] {
+  color: #065f46 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-green-'] {
+  color: #166534 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-yellow-'] {
+  color: #92400e !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-orange-'] {
+  color: #9a3412 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='text-red-'] {
+  color: #b91c1c !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-green-950'] {
+  background-color: rgba(34, 197, 94, 0.14) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-yellow-950'] {
+  background-color: rgba(250, 204, 21, 0.16) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-amber-'] {
+  background-color: rgba(217, 119, 6, 0.18) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-emerald-'] {
+  background-color: rgba(16, 185, 129, 0.16) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-orange-950'] {
+  background-color: rgba(249, 115, 22, 0.15) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-red-950'] {
+  background-color: rgba(239, 68, 68, 0.14) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-slate-900'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='bg-slate-800'] {
+  background-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='border-green-'] {
+  border-color: rgba(22, 101, 52, 0.45) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='border-yellow-'],
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='border-amber-'] {
+  border-color: rgba(146, 64, 14, 0.45) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='border-orange-'] {
+  border-color: rgba(154, 52, 18, 0.45) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='border-red-'] {
+  border-color: rgba(185, 28, 28, 0.45) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-surface [class*='border-slate-'] {
+  border-color: rgba(100, 116, 139, 0.45) !important;
+}
+
+.argus-root[data-theme='LIGHT'] .map-data-status {
+  color: #334155 !important;
+  font-weight: 600;
+}
+
+.argus-root[data-theme='LIGHT'] .map-data-status.is-loaded {
+  color: #065f46 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .map-data-status.is-warning {
+  color: #92400e !important;
+}
+
+.argus-root[data-theme='LIGHT'] .candidate-active-chip {
+  background-color: #fef3c7 !important;
+  border-color: rgba(217, 119, 6, 0.55) !important;
+  color: #7c2d12 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-object-row:nth-child(odd) {
+  background-color: #ffffff !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-object-row:nth-child(even) {
+  background-color: #f4f7fb !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-object-row:hover {
+  background-color: #e8eff7 !important;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-event-card {
+  border-color: rgba(148, 163, 184, 0.6) !important;
+  background-color: #f8fbff !important;
+}
+
+.argus-root[data-theme='LIGHT'] .settings-option-selected {
+  background-color: #dbeafe !important;
+  border-color: rgba(37, 99, 235, 0.55) !important;
+  color: #0f172a !important;
+}
+
+/* Aircraft panel hierarchy: threat > class/confidence > motion > details */
+.argus-aircraft-panel {
+  --air-bg: #0b1016;
+  --air-card-bg: #111922;
+  --air-card-border: rgba(73, 101, 131, 0.45);
+  --air-divider: rgba(102, 134, 168, 0.25);
+  --air-title: #e5eef8;
+  --air-text: #d5dfeb;
+  --air-muted: #8ca1b7;
+  --air-kpi: #f6fbff;
+  background: var(--air-bg);
+  color: var(--air-text);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.argus-aircraft-body {
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px 12px;
+  overflow: hidden;
+}
+
+.argus-aircraft-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--air-divider);
+}
+
+.argus-track-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.25;
+}
+
+.argus-track-id {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(8, 31, 47, 0.8);
+  color: #d9f3ff;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.argus-track-divider {
+  color: var(--air-muted);
+  font-size: 0.92rem;
+}
+
+.argus-track-status {
+  color: #bdd1e7;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.argus-header-caption {
+  margin-top: 4px;
+  color: var(--air-muted);
+  font-size: 0.76rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.argus-threat-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 118px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  text-align: right;
+}
+
+.argus-threat-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.argus-threat-value {
+  font-size: 1.04rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.argus-aircraft-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(295px, 1fr);
+  gap: 10px;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.argus-right-stack {
+  display: grid;
+  grid-template-rows: minmax(0, 0.9fr) minmax(0, 1.04fr) minmax(0, 1fr);
+  gap: 8px;
+  height: 100%;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.argus-aircraft-card {
+  border: 1px solid var(--air-card-border);
+  border-radius: 10px;
+  background: var(--air-card-bg);
+  padding: 10px 11px 9px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.argus-card-title {
+  margin: 0;
+  color: var(--air-title);
+  font-size: 1.04rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.argus-primary-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.argus-primary-metrics {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.argus-metric-label {
+  margin: 0;
+  color: var(--air-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.argus-primary-class {
+  margin: 3px 0 0;
+  color: var(--air-title);
+  font-size: 1.72rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.argus-primary-number {
+  margin: 3px 0 0;
+  color: #f8fbff;
+  font-size: 1.6rem;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.argus-confidence-track {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(96, 117, 140, 0.28);
+  overflow: hidden;
+}
+
+.argus-confidence-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2dd4bf, #38bdf8);
+}
+
+.argus-subsection {
+  border-top: 1px solid var(--air-divider);
+  padding-top: 8px;
+}
+
+.argus-candidate-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 5px;
+}
+
+.argus-candidate-item {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  color: var(--air-text);
+}
+
+.argus-candidate-rank {
+  color: #9eb4ca;
+  font-size: 0.79rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.argus-candidate-name {
+  font-size: 0.89rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.argus-candidate-prob {
+  color: #c5d4e3;
+  font-size: 0.83rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.argus-candidate-dim .argus-candidate-name,
+.argus-candidate-dim .argus-candidate-prob {
+  color: #7f93a8;
+  font-weight: 500;
+}
+
+.argus-candidate-empty {
+  color: var(--air-muted);
+  font-size: 0.85rem;
+}
+
+.argus-eval-main {
+  margin-top: 4px;
+}
+
+.argus-eval-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.argus-eval-threat-right {
+  margin: 0;
+  font-size: 1.74rem;
+  font-weight: 850;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.argus-eval-threat {
+  margin: 2px 0 0;
+  font-size: 1.36rem;
+  font-weight: 800;
+  line-height: 1.02;
+}
+
+.argus-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+  min-height: 24px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  padding: 2px 9px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.argus-kpi-grid {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.argus-kpi-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.argus-kpi-number {
+  margin: 0;
+  color: var(--air-kpi);
+  font-size: 1.18rem;
+  font-weight: 750;
+  line-height: 1.1;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.argus-small-kpi {
+  font-size: 0.98rem;
+}
+
+.argus-detail-list {
+  margin-top: 1px;
+  display: grid;
+  gap: 6px;
+}
+
+.argus-detail-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 22px;
+}
+
+.argus-detail-label {
+  color: var(--air-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.argus-detail-value {
+  color: var(--air-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: right;
+  line-height: 1.15;
+}
+
+@media (max-height: 900px) {
+  .argus-aircraft-body {
+    padding: 10px 12px 8px;
+  }
+
+  .argus-aircraft-grid {
+    gap: 8px;
+    grid-template-columns: minmax(0, 1.28fr) minmax(270px, 1fr);
+  }
+
+  .argus-right-stack {
+    gap: 6px;
+  }
+
+  .argus-aircraft-card {
+    padding: 9px 10px 8px;
+  }
+
+  .argus-card-title {
+    font-size: 0.98rem;
+  }
+
+  .argus-primary-class {
+    font-size: 1.42rem;
+  }
+
+  .argus-primary-number {
+    font-size: 1.44rem;
+  }
+
+  .argus-eval-threat-right {
+    font-size: 1.52rem;
+  }
+}
+
+.argus-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.argus-threat-critical {
+  background: rgba(127, 29, 29, 0.28);
+  border-color: rgba(248, 113, 113, 0.85);
+  color: #fecaca;
+}
+
+.argus-threat-high {
+  background: rgba(124, 45, 18, 0.22);
+  border-color: rgba(251, 146, 60, 0.76);
+  color: #fed7aa;
+}
+
+.argus-threat-medium {
+  background: rgba(120, 113, 16, 0.2);
+  border-color: rgba(250, 204, 21, 0.7);
+  color: #fef08a;
+}
+
+.argus-threat-low {
+  background: rgba(30, 64, 175, 0.2);
+  border-color: rgba(56, 189, 248, 0.62);
+  color: #bae6fd;
+}
+
+.argus-threat-text-critical {
+  color: #fca5a5;
+}
+
+.argus-threat-text-high {
+  color: #fdba74;
+}
+
+.argus-threat-text-medium {
+  color: #facc15;
+}
+
+.argus-threat-text-low {
+  color: #7dd3fc;
+}
+
+.argus-uav-uav {
+  background: rgba(127, 29, 29, 0.24);
+  border-color: rgba(239, 68, 68, 0.8);
+  color: #fecaca;
+}
+
+.argus-uav-non {
+  background: rgba(30, 58, 138, 0.2);
+  border-color: rgba(96, 165, 250, 0.72);
+  color: #dbeafe;
+}
+
+.argus-uav-unknown {
+  background: rgba(71, 85, 105, 0.2);
+  border-color: rgba(148, 163, 184, 0.68);
+  color: #fde68a;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-aircraft-panel {
+  --air-bg: #f7fafc;
+  --air-card-bg: #ffffff;
+  --air-card-border: rgba(148, 163, 184, 0.56);
+  --air-divider: rgba(148, 163, 184, 0.58);
+  --air-title: #0f172a;
+  --air-text: #1e293b;
+  --air-muted: #475569;
+  --air-kpi: #111827;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-track-id {
+  background: #e6f4ff;
+  border-color: rgba(14, 116, 144, 0.45);
+  color: #0f172a;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-threat-critical {
+  background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(220, 38, 38, 0.7);
+  color: #7f1d1d;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-threat-high {
+  background: rgba(251, 146, 60, 0.2);
+  border-color: rgba(234, 88, 12, 0.65);
+  color: #7c2d12;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-threat-medium {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(180, 83, 9, 0.55);
+  color: #78350f;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-threat-low {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(37, 99, 235, 0.6);
+  color: #1e3a8a;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-threat-text-critical {
+  color: #b91c1c;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-threat-text-high {
+  color: #c2410c;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-threat-text-medium {
+  color: #a16207;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-threat-text-low {
+  color: #1d4ed8;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-uav-uav {
+  background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(220, 38, 38, 0.62);
+  color: #7f1d1d;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-uav-non {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(30, 64, 175, 0.5);
+  color: #1e3a8a;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-uav-unknown {
+  background: rgba(203, 213, 225, 0.45);
+  border-color: rgba(100, 116, 139, 0.55);
+  color: #92400e;
+}

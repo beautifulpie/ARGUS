@@ -21,7 +21,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.append(str(CURRENT_DIR))
 
 from config import ServiceConfig  # noqa: E402
-from inference import TrackObservation, UavBinaryInferencer  # noqa: E402
+from inference import ArgusBrainInferencer, TrackObservation  # noqa: E402
 
 
 def _to_record(value: Any) -> dict[str, Any]:
@@ -118,12 +118,16 @@ class ModelActivateRequest(BaseModel):
 class ServiceState:
     def __init__(self, config: ServiceConfig):
         self.config = config
-        self.inferencer = UavBinaryInferencer(
+        self.inferencer = ArgusBrainInferencer(
             threshold=config.uav_threshold,
             feature_window_ms=config.feature_window_ms,
             model_path=config.model_path,
             active_model_id=config.active_model_id,
         )
+        self.frame_timestamp_history: deque[float] = deque(maxlen=240)
+        self.inference_ms_history: deque[float] = deque(maxlen=300)
+        self.model_latency_frame_history: deque[float] = deque(maxlen=300)
+        self.pipeline_ms_history: deque[float] = deque(maxlen=300)
         self.last_frame: dict[str, Any] = {
             "objects": [],
             "events": [],
@@ -136,8 +140,6 @@ class ServiceState:
         self.start_ts = time.time()
         self.lock = asyncio.Lock()
         self.last_uav_decision: dict[str, str] = {}
-        self.inference_ms_history: deque[float] = deque(maxlen=300)
-        self.pipeline_ms_history: deque[float] = deque(maxlen=300)
         self.last_polled_at = 0.0
         self._sync_model_config()
 
@@ -157,14 +159,16 @@ class ServiceState:
         connected: bool,
     ) -> dict[str, Any]:
         inference_p50, inference_p95 = self._percentiles(self.inference_ms_history)
+        model_p50, model_p95 = self._percentiles(self.model_latency_frame_history)
         _, pipeline_p95 = self._percentiles(self.pipeline_ms_history)
+        measured_fps = self._calculate_measured_fps()
 
         active_count = sum(
             1
             for obj in objects
             if _to_text(obj.get("status"), "").upper() in {"TRACKING", "STABLE"}
         )
-        model_name = _to_text(source_status.get("modelName"), "Radar-UAV-Binary")
+        model_name = _to_text(source_status.get("modelName"), "ARGUS-Brain-Multiclass")
         model_version = _to_text(source_status.get("modelVersion"), self.inferencer.model_version)
 
         return {
@@ -172,8 +176,8 @@ class ServiceState:
             "modelName": model_name,
             "modelVersion": model_version,
             "device": _to_text(source_status.get("device"), "AESA-Array-X1"),
-            "latency": _to_float(source_status.get("latency"), 0.0),
-            "fps": _to_float(source_status.get("fps"), 0.0),
+            "latency": model_p50 if model_p50 > 0 else _to_float(source_status.get("latency"), 0.0),
+            "fps": measured_fps if measured_fps > 0 else _to_float(source_status.get("fps"), 0.0),
             "trackedObjects": len(objects),
             "activeTracksCount": active_count,
             "totalDetected": max(
@@ -183,6 +187,9 @@ class ServiceState:
             "cpuUsage": _to_float(source_status.get("cpuUsage"), 0.0),
             "gpuUsage": _to_float(source_status.get("gpuUsage"), 0.0),
             "ramUsage": _to_float(source_status.get("ramUsage"), 0.0),
+            "measuredFps": measured_fps,
+            "modelLatencyP50": model_p50,
+            "modelLatencyP95": model_p95,
             "inferenceLatencyP50": inference_p50,
             "inferenceLatencyP95": inference_p95,
             "pipelineLatencyP95": pipeline_p95,
@@ -196,6 +203,15 @@ class ServiceState:
         p50_idx = int(0.5 * (len(ordered) - 1))
         p95_idx = int(0.95 * (len(ordered) - 1))
         return (round(ordered[p50_idx], 3), round(ordered[p95_idx], 3))
+
+    def _calculate_measured_fps(self) -> float:
+        if len(self.frame_timestamp_history) < 2:
+            return 0.0
+        elapsed = self.frame_timestamp_history[-1] - self.frame_timestamp_history[0]
+        if elapsed <= 0:
+            return 0.0
+        fps = (len(self.frame_timestamp_history) - 1) / elapsed
+        return round(fps, 3)
 
     async def poll_once(self) -> None:
         poll_start = time.perf_counter()
@@ -216,6 +232,7 @@ class ServiceState:
 
         normalized_objects: list[dict[str, Any]] = []
         normalized_events: list[dict[str, Any]] = []
+        frame_model_latency_total_ms = 0.0
 
         for raw in objects:
             obj = _to_record(raw)
@@ -253,6 +270,7 @@ class ServiceState:
                 ),
             )
             inference_ms = (time.perf_counter() - inference_start) * 1000.0
+            frame_model_latency_total_ms += inference_ms
             self.inference_ms_history.append(inference_ms)
 
             prev_decision = self.last_uav_decision.get(object_id, "UNKNOWN")
@@ -266,6 +284,7 @@ class ServiceState:
                         "type": "ALERT",
                         "message": f"{object_id} UAV 의심 객체 감지 ({inference['uavProbability']:.1f}%)",
                         "objectId": object_id,
+                        "objectClass": inference.get("class", object_class),
                     }
                 )
 
@@ -279,6 +298,7 @@ class ServiceState:
                     "speed": speed,
                     "distance": distance,
                     "confidence": confidence,
+                    "inferenceLatencyMs": round(inference_ms, 3),
                     **inference,
                 }
             )
@@ -294,11 +314,20 @@ class ServiceState:
                     "type": _to_text(evt.get("type"), "INFO"),
                     "message": _to_text(evt.get("message"), "이벤트"),
                     "objectId": _to_text(evt.get("objectId"), ""),
+                    "objectClass": _to_text(
+                        evt.get("objectClass") or evt.get("class") or evt.get("className"),
+                        "UNKNOWN",
+                    ),
                 }
             )
 
         pipeline_ms = (time.perf_counter() - poll_start) * 1000.0
         self.pipeline_ms_history.append(pipeline_ms)
+        frame_model_latency_avg = (
+            frame_model_latency_total_ms / len(normalized_objects) if normalized_objects else 0.0
+        )
+        self.model_latency_frame_history.append(frame_model_latency_avg)
+        self.frame_timestamp_history.append(time.perf_counter())
 
         async with self.lock:
             self.source_connected = True

@@ -1,6 +1,7 @@
 import { ARGUS_CONFIG, buildArgusUrl } from '../config/argus';
 import {
   DetectedObject,
+  GeoPosition,
   ObjectClass,
   ObjectStatus,
   RiskLevel,
@@ -205,6 +206,25 @@ const toPoint = (value: unknown): { x: number; y: number } | null => {
   return null;
 };
 
+const toGeoPosition = (value: unknown): GeoPosition | null => {
+  if (Array.isArray(value) && value.length >= 2) {
+    const lat = Number(value[0]);
+    const lon = Number(value[1]);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      return { lat, lon };
+    }
+    return null;
+  }
+
+  const record = toRecord(value);
+  const lat = Number(record.lat ?? record.latitude);
+  const lon = Number(record.lon ?? record.lng ?? record.longitude);
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    return { lat, lon };
+  }
+  return null;
+};
+
 const buildPredictedPath = (
   currentX: number,
   currentY: number,
@@ -294,6 +314,15 @@ const mapObject = (
     positionRecord.z ?? positionRecord.altitude ?? record.altitude,
     previousObject?.position.z ?? 0
   );
+  const geoPosition =
+    toGeoPosition(
+      record.geoPosition ??
+        record.geo ??
+        record.latLon ??
+        record.latlng ??
+        record.wgs84 ??
+        positionRecord
+    ) ?? previousObject?.geoPosition;
 
   const velocityRecord = toRecord(record.velocity ?? record.velocityVector ?? record.vector);
   const velocityX = toNumber(
@@ -382,6 +411,14 @@ const mapObject = (
         uavInference.modelVersion ??
         toRecord(record.model).version
     ) || previousObject?.inferenceModelVersion;
+  const inferenceLatencyMs = clamp(
+    toNumber(
+      record.inferenceLatencyMs ?? uavInference.inferenceLatencyMs ?? uavInference.latencyMs,
+      previousObject?.inferenceLatencyMs ?? 0
+    ),
+    0,
+    10000
+  );
   const featureWindowMs = Math.max(
     0,
     Math.floor(
@@ -417,6 +454,34 @@ const mapObject = (
       ? parsedPredictedPath
       : buildPredictedPath(x, y, velocityX, velocityY, 10);
 
+  const rawGeoTrackHistory = Array.isArray(
+    record.geoTrackHistory ?? record.trackHistoryGeo ?? record.historyGeo
+  )
+    ? (record.geoTrackHistory ?? record.trackHistoryGeo ?? record.historyGeo)
+    : [];
+  const parsedGeoTrackHistory = (rawGeoTrackHistory as unknown[])
+    .map((entry) => toGeoPosition(entry))
+    .filter((point): point is GeoPosition => point !== null);
+  const geoTrackHistory =
+    parsedGeoTrackHistory.length > 0
+      ? parsedGeoTrackHistory
+      : geoPosition
+        ? [...(previousObject?.geoTrackHistory ?? []).slice(-19), geoPosition]
+        : previousObject?.geoTrackHistory;
+
+  const rawGeoPredictedPath = Array.isArray(
+    record.geoPredictedPath ?? record.predictedPathGeo ?? record.futureGeo
+  )
+    ? (record.geoPredictedPath ?? record.predictedPathGeo ?? record.futureGeo)
+    : [];
+  const parsedGeoPredictedPath = (rawGeoPredictedPath as unknown[])
+    .map((entry) => toGeoPosition(entry))
+    .filter((point): point is GeoPosition => point !== null);
+  const geoPredictedPath =
+    parsedGeoPredictedPath.length > 0
+      ? parsedGeoPredictedPath
+      : previousObject?.geoPredictedPath;
+
   const trackingDuration = Math.max(
     0,
     Math.floor(
@@ -443,11 +508,15 @@ const mapObject = (
     timestamp,
     trackHistory: trackHistory.slice(-20),
     predictedPath,
+    geoPosition,
+    geoTrackHistory: geoTrackHistory?.slice(-20),
+    geoPredictedPath,
     uavThreshold,
     uavProbability,
     uavDecision,
     inferenceModelVersion,
     featureWindowMs,
+    inferenceLatencyMs,
   };
 };
 
@@ -464,6 +533,11 @@ const mapEvent = (rawEvent: unknown, index: number): TimelineEvent | null => {
     `argus-event-${timestamp.getTime()}-${String(index + 1).padStart(3, '0')}`;
   const type = normalizeEventType(record.type ?? record.level ?? record.severity, 'INFO');
   const objectId = toStringOrEmpty(record.objectId ?? record.trackId ?? record.targetId) || undefined;
+  const objectClassRaw =
+    record.objectClass ?? record.class ?? record.className ?? toRecord(record.object).class;
+  const objectClass = objectClassRaw
+    ? normalizeClass(objectClassRaw, 'UAV')
+    : 'UNKNOWN';
 
   return {
     id,
@@ -471,6 +545,7 @@ const mapEvent = (rawEvent: unknown, index: number): TimelineEvent | null => {
     type,
     message,
     objectId,
+    objectClass,
   };
 };
 
@@ -554,6 +629,9 @@ const mapSystemStatus = (rawStatus: AnyRecord, objects: DetectedObject[]): Syste
     cpuUsage: clamp(toNumber(rawStatus.cpuUsage, 0), 0, 100),
     gpuUsage: clamp(toNumber(rawStatus.gpuUsage, 0), 0, 100),
     ramUsage: clamp(toNumber(rawStatus.ramUsage, 0), 0, 100),
+    measuredFps: clamp(toNumber(rawStatus.measuredFps ?? rawStatus.fpsMeasured, 0), 0, 500),
+    modelLatencyP50: clamp(toNumber(rawStatus.modelLatencyP50 ?? rawStatus.mlLatencyP50, 0), 0, 10000),
+    modelLatencyP95: clamp(toNumber(rawStatus.modelLatencyP95 ?? rawStatus.mlLatencyP95, 0), 0, 10000),
     inferenceLatencyP50: clamp(toNumber(rawStatus.inferenceLatencyP50 ?? rawStatus.mlLatencyP50, 0), 0, 10000),
     inferenceLatencyP95: clamp(toNumber(rawStatus.inferenceLatencyP95 ?? rawStatus.mlLatencyP95, 0), 0, 10000),
     pipelineLatencyP95: clamp(toNumber(rawStatus.pipelineLatencyP95 ?? rawStatus.totalLatencyP95, 0), 0, 10000),

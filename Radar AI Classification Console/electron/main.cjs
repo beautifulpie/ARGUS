@@ -1,7 +1,8 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const os = require('os');
+const { spawn, execFile } = require('child_process');
 
 const DEFAULT_INFER_PORT = Number(process.env.RADAR_INFER_PORT || 8787);
 const DEFAULT_ARGUS_SOURCE_URL =
@@ -10,8 +11,13 @@ const DEFAULT_ARGUS_SOURCE_URL =
 let mainWindow = null;
 let inferProc = null;
 let healthInterval = null;
+let resourceInterval = null;
 let shutdownRequested = false;
 let restartAttempts = 0;
+let previousCpuSnapshot = null;
+let gpuSamplingInFlight = false;
+let lastGpuSampleAt = 0;
+let gpuUnavailableLogged = false;
 
 const runtimeState = {
   startedAt: Date.now(),
@@ -28,6 +34,14 @@ const runtimeState = {
     error: null,
     payload: null,
   },
+  resources: {
+    cpuUsage: null,
+    gpuUsage: null,
+    ramUsage: null,
+    gpuAvailable: false,
+    lastUpdatedAt: null,
+    source: 'bootstrap',
+  },
   logs: [],
 };
 
@@ -43,6 +57,123 @@ const pushLog = (level, message) => {
   }
 };
 
+const clampPercent = (value) => Math.min(100, Math.max(0, value));
+
+const GPU_QUERY_ARG_SETS = [
+  ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+  ['--query-gpu=utilization.gpu', '--format=csv,noheader'],
+];
+
+const buildGpuCommandCandidates = () => {
+  if (process.platform === 'linux') {
+    return ['nvidia-smi', '/usr/bin/nvidia-smi', '/usr/lib/wsl/lib/nvidia-smi'];
+  }
+
+  if (process.platform === 'win32') {
+    const candidates = ['nvidia-smi'];
+    const windowsRoots = [
+      process.env.ProgramW6432,
+      process.env['ProgramFiles'],
+      process.env['ProgramFiles(x86)'],
+    ].filter((value) => typeof value === 'string' && value);
+
+    windowsRoots.forEach((root) => {
+      candidates.push(path.join(root, 'NVIDIA Corporation', 'NVSMI', 'nvidia-smi.exe'));
+    });
+
+    return candidates;
+  }
+
+  return ['nvidia-smi'];
+};
+
+const parseGpuUsageValues = (stdout) =>
+  stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const match = line.match(/-?\d+(\.\d+)?/);
+      if (!match) return NaN;
+      return Number(match[0]);
+    })
+    .filter((value) => Number.isFinite(value))
+    .map((value) => clampPercent(value));
+
+const runGpuQuery = (binary, args) =>
+  new Promise((resolve) => {
+    execFile(binary, args, { timeout: 1200, windowsHide: true }, (error, stdout) => {
+      if (error) {
+        resolve(null);
+        return;
+      }
+      const values = parseGpuUsageValues(stdout);
+      resolve(values.length > 0 ? values : null);
+    });
+  });
+
+const readCpuSnapshot = () => {
+  const cpus = os.cpus();
+  let idle = 0;
+  let total = 0;
+  cpus.forEach((cpu) => {
+    const times = cpu.times;
+    idle += times.idle;
+    total += times.user + times.nice + times.sys + times.irq + times.idle;
+  });
+  return { idle, total };
+};
+
+const sampleCpuUsage = () => {
+  const current = readCpuSnapshot();
+  if (!previousCpuSnapshot) {
+    previousCpuSnapshot = current;
+    return null;
+  }
+
+  const totalDiff = current.total - previousCpuSnapshot.total;
+  const idleDiff = current.idle - previousCpuSnapshot.idle;
+  previousCpuSnapshot = current;
+
+  if (totalDiff <= 0) {
+    return null;
+  }
+
+  return clampPercent(((totalDiff - idleDiff) / totalDiff) * 100);
+};
+
+const sampleRamUsage = () => {
+  const total = os.totalmem();
+  const free = os.freemem();
+  if (total <= 0) return 0;
+  return clampPercent(((total - free) / total) * 100);
+};
+
+const sampleGpuUsage = async () => {
+  if (process.platform !== 'linux' && process.platform !== 'win32') {
+    return null;
+  }
+
+  const binaries = buildGpuCommandCandidates();
+
+  for (const binary of binaries) {
+    for (const args of GPU_QUERY_ARG_SETS) {
+      // eslint-disable-next-line no-await-in-loop
+      const values = await runGpuQuery(binary, args);
+      if (!values || values.length === 0) continue;
+      const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+      return clampPercent(avg);
+    }
+  }
+
+  if (!gpuUnavailableLogged) {
+    gpuUnavailableLogged = true;
+    pushLog('info', `GPU usage monitor unavailable (checked: ${binaries.join(', ')}).`);
+  }
+
+  return null;
+};
+
 const getRuntimeConfigPath = () => path.join(app.getPath('userData'), 'runtime-config.json');
 
 const loadRuntimeConfig = () => {
@@ -54,6 +185,8 @@ const loadRuntimeConfig = () => {
     uavThreshold: 35,
     modelPath: '',
     activeModelId: 'heuristic-default',
+    detectionMode: 'ACCURACY',
+    resourceMonitorIntervalMs: 1000,
   };
 
   const configPath = getRuntimeConfigPath();
@@ -63,9 +196,28 @@ const loadRuntimeConfig = () => {
     }
     const raw = fs.readFileSync(configPath, 'utf-8');
     const parsed = JSON.parse(raw);
-    return {
+    const normalizedParsed =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    const merged = {
       ...fallback,
-      ...parsed,
+      ...normalizedParsed,
+    };
+    const detectionMode = merged.detectionMode === 'SPEED' ? 'SPEED' : 'ACCURACY';
+    const parsedResourceInterval = Number(merged.resourceMonitorIntervalMs);
+    const hasPersistedInterval = Object.prototype.hasOwnProperty.call(
+      normalizedParsed,
+      'resourceMonitorIntervalMs'
+    );
+    const resourceMonitorIntervalMs =
+      hasPersistedInterval && Number.isFinite(parsedResourceInterval) && parsedResourceInterval >= 1000
+        ? Math.floor(parsedResourceInterval)
+        : detectionMode === 'SPEED'
+          ? 5000
+          : 1000;
+    return {
+      ...merged,
+      detectionMode,
+      resourceMonitorIntervalMs,
     };
   } catch (error) {
     pushLog('warn', `runtime config load failed: ${error.message}`);
@@ -86,6 +238,8 @@ let runtimeConfig = {
   uavThreshold: 35,
   modelPath: '',
   activeModelId: 'heuristic-default',
+  detectionMode: 'ACCURACY',
+  resourceMonitorIntervalMs: 1000,
 };
 
 const inferHealthUrl = () => `http://127.0.0.1:${runtimeConfig.inferPort}/healthz`;
@@ -233,6 +387,54 @@ const startHealthMonitor = () => {
   }, 2000);
 };
 
+const stopResourceMonitor = () => {
+  if (resourceInterval) {
+    clearInterval(resourceInterval);
+    resourceInterval = null;
+  }
+};
+
+const startResourceMonitor = () => {
+  stopResourceMonitor();
+  previousCpuSnapshot = null;
+  const configuredInterval = Number(runtimeConfig.resourceMonitorIntervalMs);
+  const intervalMs =
+    Number.isFinite(configuredInterval) && configuredInterval >= 1000
+      ? Math.floor(configuredInterval)
+      : 1000;
+
+  const sampleResources = async () => {
+    const cpuUsage = sampleCpuUsage();
+    if (typeof cpuUsage === 'number') {
+      runtimeState.resources.cpuUsage = Number(cpuUsage.toFixed(1));
+    }
+    runtimeState.resources.ramUsage = Number(sampleRamUsage().toFixed(1));
+
+    if (!gpuSamplingInFlight && Date.now() - lastGpuSampleAt >= 3000) {
+      gpuSamplingInFlight = true;
+      lastGpuSampleAt = Date.now();
+      try {
+        const gpuUsage = await sampleGpuUsage();
+        if (typeof gpuUsage === 'number') {
+          runtimeState.resources.gpuUsage = Number(gpuUsage.toFixed(1));
+          runtimeState.resources.gpuAvailable = true;
+        }
+      } finally {
+        gpuSamplingInFlight = false;
+      }
+    }
+
+    runtimeState.resources.lastUpdatedAt = new Date().toISOString();
+    runtimeState.resources.source = 'electron-host';
+    broadcastRuntimeStatus();
+  };
+
+  void sampleResources();
+  resourceInterval = setInterval(() => {
+    void sampleResources();
+  }, intervalMs);
+};
+
 const buildRendererUrl = () => {
   const base = process.env.ELECTRON_RENDERER_URL || 'http://127.0.0.1:5173';
   const url = new URL(base);
@@ -283,12 +485,61 @@ ipcMain.handle('runtime:getLogs', async () => {
 });
 
 ipcMain.handle('runtime:updateConfig', async (_event, patch = {}) => {
+  const previousConfig = runtimeConfig;
   runtimeConfig = {
     ...runtimeConfig,
     ...patch,
   };
+
+  runtimeConfig.detectionMode = runtimeConfig.detectionMode === 'SPEED' ? 'SPEED' : 'ACCURACY';
+  const hasDetectionModePatch = Object.prototype.hasOwnProperty.call(patch, 'detectionMode');
+  const hasIntervalPatch = Object.prototype.hasOwnProperty.call(patch, 'resourceMonitorIntervalMs');
+  const parsedInterval = Number(runtimeConfig.resourceMonitorIntervalMs);
+  const isValidInterval = Number.isFinite(parsedInterval) && parsedInterval >= 1000;
+
+  if (hasIntervalPatch) {
+    runtimeConfig.resourceMonitorIntervalMs = isValidInterval
+      ? Math.floor(parsedInterval)
+      : runtimeConfig.detectionMode === 'SPEED'
+        ? 5000
+        : 1000;
+  } else if (hasDetectionModePatch) {
+    runtimeConfig.resourceMonitorIntervalMs = runtimeConfig.detectionMode === 'SPEED' ? 5000 : 1000;
+  } else if (isValidInterval) {
+    runtimeConfig.resourceMonitorIntervalMs = Math.floor(parsedInterval);
+  } else {
+    runtimeConfig.resourceMonitorIntervalMs = runtimeConfig.detectionMode === 'SPEED' ? 5000 : 1000;
+  }
+
   saveRuntimeConfig(runtimeConfig);
-  startInferenceService();
+
+  const shouldRestartInfer =
+    (Object.prototype.hasOwnProperty.call(patch, 'inferPort') &&
+      previousConfig.inferPort !== runtimeConfig.inferPort) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'argusSourceUrl') &&
+      previousConfig.argusSourceUrl !== runtimeConfig.argusSourceUrl) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'pollIntervalMs') &&
+      previousConfig.pollIntervalMs !== runtimeConfig.pollIntervalMs) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'requestTimeoutMs') &&
+      previousConfig.requestTimeoutMs !== runtimeConfig.requestTimeoutMs) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'uavThreshold') &&
+      previousConfig.uavThreshold !== runtimeConfig.uavThreshold) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'modelPath') &&
+      previousConfig.modelPath !== runtimeConfig.modelPath) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'activeModelId') &&
+      previousConfig.activeModelId !== runtimeConfig.activeModelId);
+
+  if (shouldRestartInfer) {
+    startInferenceService();
+  }
+
+  if (
+    hasIntervalPatch ||
+    hasDetectionModePatch
+  ) {
+    startResourceMonitor();
+  }
+
   broadcastRuntimeStatus();
   return {
     ok: true,
@@ -301,6 +552,7 @@ app.whenReady().then(async () => {
   shutdownRequested = false;
   startInferenceService();
   startHealthMonitor();
+  startResourceMonitor();
   await createWindow();
 });
 
@@ -316,5 +568,6 @@ app.on('before-quit', () => {
     clearInterval(healthInterval);
     healthInterval = null;
   }
+  stopResourceMonitor();
   stopInferenceService();
 });

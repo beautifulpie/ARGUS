@@ -13,7 +13,7 @@ ARGUS는 레이더 기반 항적을 실시간으로 감시하고 UAV 위협을 �
 현재 레포는 아래 3개 영역으로 정리되어 있습니다.
 
 - **ARGUS (Main Frame)**: 웹 콘솔 + Electron 런타임 (레포 루트)
-- **ARGUS-Brain**: UAV 분류 AI 모델 서비스 (`/ARGUS-Brain`)
+- **ARGUS-Brain**: 멀티 클래스 항적 분류 AI 모델 서비스 (`/ARGUS-Brain`)
 - **ARGUS-Eye**: 신호 처리/특징 추출 모델 (`/ARGUS-Eye`)
 
 ## ARGUS (Main Frame)
@@ -33,7 +33,10 @@ Electron 실행:
 
 ## ARGUS-Brain
 
-항적 기반 UAV/Non-UAV 이진 분류 서비스입니다.
+항적 기반 멀티 클래스 분류 서비스입니다.
+
+- 기본 클래스: `HELICOPTER`, `UAV`, `HIGHSPEED`, `BIRD_FLOCK`, `BIRD`, `CIVIL_AIR`, `FIGHTER`
+- 기존 콘솔 호환을 위해 `uavDecision/uavProbability`도 파생값으로 함께 제공합니다.
 
 ```bash
 cd ARGUS-Brain

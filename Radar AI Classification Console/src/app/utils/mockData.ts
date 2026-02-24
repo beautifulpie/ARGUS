@@ -6,9 +6,19 @@ import {
   ObjectStatus,
   RiskLevel,
   ClassProbability,
+  GeoPosition,
 } from '../types';
 
 const OBJECT_CLASSES: ObjectClass[] = ['HELICOPTER', 'UAV', 'HIGHSPEED', 'BIRD_FLOCK', 'BIRD', 'CIVIL_AIR', 'FIGHTER'];
+const DEFAULT_SENSOR_GEO: GeoPosition = { lat: 37.5665, lon: 126.9780 };
+const KOREA_BOUNDS = {
+  minLat: 32.7,
+  maxLat: 39.9,
+  minLon: 123.0,
+  maxLon: 132.2,
+};
+const METERS_PER_RADAR_UNIT = 150;
+const CALIBRATION_STORAGE_KEY = 'argus.map.calibration.v1';
 
 let objectIdCounter = 1;
 let existingObjects: DetectedObject[] = [];
@@ -17,6 +27,50 @@ const clamp = (value: number, min: number, max: number): number => {
   if (value < min) return min;
   if (value > max) return max;
   return value;
+};
+
+const normalizeLongitude = (lon: number): number => {
+  let normalized = lon;
+  while (normalized < -180) normalized += 360;
+  while (normalized > 180) normalized -= 360;
+  return normalized;
+};
+
+const clampGeoToKorea = (point: GeoPosition): GeoPosition => ({
+  lat: clamp(point.lat, KOREA_BOUNDS.minLat, KOREA_BOUNDS.maxLat),
+  lon: clamp(normalizeLongitude(point.lon), KOREA_BOUNDS.minLon, KOREA_BOUNDS.maxLon),
+});
+
+const offsetGeoPosition = (
+  origin: GeoPosition,
+  eastMeters: number,
+  northMeters: number
+): GeoPosition => {
+  const latDelta = northMeters / 111320;
+  const lonScale = Math.max(0.1, Math.cos((origin.lat * Math.PI) / 180));
+  const lonDelta = eastMeters / (111320 * lonScale);
+  return clampGeoToKorea({
+    lat: origin.lat + latDelta,
+    lon: origin.lon + lonDelta,
+  });
+};
+
+const readSensorCalibration = (): GeoPosition => {
+  if (typeof window === 'undefined') {
+    return DEFAULT_SENSOR_GEO;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CALIBRATION_STORAGE_KEY);
+    if (!raw) return DEFAULT_SENSOR_GEO;
+    const parsed = JSON.parse(raw) as Partial<GeoPosition>;
+    if (typeof parsed.lat !== 'number' || typeof parsed.lon !== 'number') {
+      return DEFAULT_SENSOR_GEO;
+    }
+    return clampGeoToKorea({ lat: parsed.lat, lon: parsed.lon });
+  } catch {
+    return DEFAULT_SENSOR_GEO;
+  }
 };
 
 const estimateUavProbability = (
@@ -96,12 +150,33 @@ export function generateDetectedObject(existing?: DetectedObject): DetectedObjec
     const speed = Math.sqrt(velocity.x ** 2 + velocity.y ** 2 + velocity.z ** 2);
     const distance = Math.sqrt(position.x ** 2 + position.y ** 2);
     const uavProbability = estimateUavProbability(existing.class, speed, distance);
+    const fallbackSensorGeo = readSensorCalibration();
+    const previousGeo =
+      existing.geoPosition ??
+      offsetGeoPosition(
+        fallbackSensorGeo,
+        existing.position.x * METERS_PER_RADAR_UNIT,
+        existing.position.y * METERS_PER_RADAR_UNIT
+      );
+    const geoPosition = offsetGeoPosition(
+      previousGeo,
+      (position.x - existing.position.x) * METERS_PER_RADAR_UNIT,
+      (position.y - existing.position.y) * METERS_PER_RADAR_UNIT
+    );
 
     // Update track history
     const trackHistory = [...existing.trackHistory.slice(-19), { x: position.x, y: position.y }];
+    const geoTrackHistory = [...(existing.geoTrackHistory ?? [previousGeo]).slice(-19), geoPosition];
     
     // Update predicted path (project 10 seconds ahead)
     const predictedPath = predictPath({ x: position.x, y: position.y }, { x: velocity.x, y: velocity.y }, 10);
+    const geoPredictedPath = predictedPath.map((point) =>
+      offsetGeoPosition(
+        geoPosition,
+        (point.x - position.x) * METERS_PER_RADAR_UNIT,
+        (point.y - position.y) * METERS_PER_RADAR_UNIT
+      )
+    );
 
     // Slight confidence variation
     const confidence = Math.max(50, Math.min(99, existing.confidence + (Math.random() - 0.5) * 5));
@@ -120,6 +195,9 @@ export function generateDetectedObject(existing?: DetectedObject): DetectedObjec
       timestamp: new Date(),
       trackHistory,
       predictedPath,
+      geoPosition,
+      geoTrackHistory,
+      geoPredictedPath,
       uavThreshold,
       uavProbability,
       uavDecision: toUavDecision(uavProbability, uavThreshold),
@@ -181,6 +259,19 @@ export function generateDetectedObject(existing?: DetectedObject): DetectedObjec
   else if (objectClass === 'BIRD' || objectClass === 'BIRD_FLOCK') riskLevel = 'LOW';
   
   const predictedPath = predictPath({ x: position.x, y: position.y }, { x: velocity.x, y: velocity.y }, 10);
+  const sensorGeo = readSensorCalibration();
+  const geoPosition = offsetGeoPosition(
+    sensorGeo,
+    position.x * METERS_PER_RADAR_UNIT,
+    position.y * METERS_PER_RADAR_UNIT
+  );
+  const geoPredictedPath = predictedPath.map((point) =>
+    offsetGeoPosition(
+      geoPosition,
+      (point.x - position.x) * METERS_PER_RADAR_UNIT,
+      (point.y - position.y) * METERS_PER_RADAR_UNIT
+    )
+  );
 
   return {
     id,
@@ -198,6 +289,9 @@ export function generateDetectedObject(existing?: DetectedObject): DetectedObjec
     timestamp: new Date(),
     trackHistory: [{ x: position.x, y: position.y }],
     predictedPath,
+    geoPosition,
+    geoTrackHistory: [geoPosition],
+    geoPredictedPath,
     uavThreshold,
     uavProbability,
     uavDecision: toUavDecision(uavProbability, uavThreshold),
@@ -298,7 +392,8 @@ let eventIdCounter = 1;
 export function generateEvent(
   type: TimelineEvent['type'],
   customMessage?: string,
-  objectId?: string
+  objectId?: string,
+  objectClass?: ObjectClass
 ): TimelineEvent {
   const messages = {
     INFO: [
@@ -329,6 +424,7 @@ export function generateEvent(
     type,
     message,
     objectId,
+    objectClass: objectClass ?? 'UNKNOWN',
   };
 }
 
@@ -356,5 +452,5 @@ export function generateObjectEvent(obj: DetectedObject, eventType: 'DETECTED' |
       break;
   }
 
-  return generateEvent(type, message, obj.id);
+  return generateEvent(type, message, obj.id, obj.class);
 }

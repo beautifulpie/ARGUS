@@ -1,6 +1,6 @@
 # ARGUS-Brain
 
-Python UAV classification model service for ARGUS.
+Python multi-class track classification service for ARGUS.
 
 ## Run locally
 
@@ -34,6 +34,37 @@ python app/main.py
 - `POST /api/v1/models/register`
 - `POST /api/v1/models/activate`
 - `DELETE /api/v1/models/{model_id}`
+
+## Multi-class output
+
+`ARGUS-Brain` returns multi-class classification fields per track:
+
+- `class`: top predicted class
+- `confidence`: top-class confidence (0-100)
+- `probabilities`: class probability list
+- `inferenceModelVersion`: active model version
+
+Default classes:
+
+- `HELICOPTER`
+- `UAV`
+- `HIGHSPEED`
+- `BIRD_FLOCK`
+- `BIRD`
+- `CIVIL_AIR`
+- `FIGHTER`
+
+For backward compatibility with existing console logic, derived fields are also included:
+
+- `uavDecision`
+- `uavProbability`
+- `uavThreshold`
+
+Runtime metrics include measured values:
+
+- `fps` / `measuredFps`: 실측 프레임 처리율
+- `latency` / `modelLatencyP50` / `modelLatencyP95`: 모델 추론 레이턴시 통계
+- `pipelineLatencyP95`: 프레임 파이프라인 레이턴시
 
 ## Model hot-swap flow
 

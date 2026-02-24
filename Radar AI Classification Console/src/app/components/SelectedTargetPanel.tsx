@@ -1,5 +1,5 @@
-import { Target, Navigation, Gauge, Box, Clock, AlertTriangle } from 'lucide-react';
-import { DetectedObject, ObjectClass, RiskLevel, ObjectStatus } from '../types';
+import { AlertTriangle, Box, Navigation, Target } from 'lucide-react';
+import { DetectedObject, ObjectClass, ObjectStatus, RiskLevel, UavDecision } from '../types';
 
 interface SelectedTargetPanelProps {
   selectedObject: DetectedObject | null;
@@ -30,253 +30,199 @@ const STATUS_NAMES_KR: Record<ObjectStatus, string> = {
   CANDIDATE: '후보 추적',
 };
 
+const UAV_DECISION_NAMES: Record<UavDecision, string> = {
+  UAV: 'UAV',
+  NON_UAV: 'NON-UAV',
+  UNKNOWN: 'UNKNOWN',
+};
+
+const THREAT_BADGE_CLASS: Record<RiskLevel, string> = {
+  LOW: 'argus-threat-low',
+  MEDIUM: 'argus-threat-medium',
+  HIGH: 'argus-threat-high',
+  CRITICAL: 'argus-threat-critical',
+};
+
+const THREAT_TEXT_CLASS: Record<RiskLevel, string> = {
+  LOW: 'argus-threat-text-low',
+  MEDIUM: 'argus-threat-text-medium',
+  HIGH: 'argus-threat-text-high',
+  CRITICAL: 'argus-threat-text-critical',
+};
+
+const UAV_BADGE_CLASS: Record<UavDecision, string> = {
+  UAV: 'argus-uav-uav',
+  NON_UAV: 'argus-uav-non',
+  UNKNOWN: 'argus-uav-unknown',
+};
+
 export function SelectedTargetPanel({ selectedObject }: SelectedTargetPanelProps) {
   if (!selectedObject) {
     return (
-      <div className="h-full flex items-center justify-center bg-[#0a0d12] border-b border-cyan-950/50">
-        <div className="text-center">
-          <Target className="w-16 h-16 text-cyan-900/30 mx-auto mb-4" />
-          <p className="text-base text-gray-500 font-mono">선택된 객체 없음</p>
-          <p className="text-sm text-gray-600 font-mono mt-2">공간 뷰에서 객체를 클릭하세요</p>
+      <div className="argus-aircraft-panel argus-surface h-full border-b border-cyan-950/50 flex items-center justify-center">
+        <div className="text-center px-6">
+          <Target className="w-14 h-14 text-cyan-900/40 mx-auto mb-3" />
+          <p className="text-lg font-semibold text-slate-300">선택된 객체 없음</p>
+          <p className="text-sm text-slate-500 mt-2">공간 뷰에서 객체를 클릭하세요</p>
         </div>
       </div>
     );
   }
 
-  const getRiskColor = () => {
-    switch (selectedObject.riskLevel) {
-      case 'CRITICAL':
-        return 'text-red-500 border-red-500/50 bg-red-950/20';
-      case 'HIGH':
-        return 'text-orange-500 border-orange-500/50 bg-orange-950/20';
-      case 'MEDIUM':
-        return 'text-yellow-500 border-yellow-500/50 bg-yellow-950/20';
-      case 'LOW':
-        return 'text-green-500 border-green-500/50 bg-green-950/20';
-    }
-  };
+  const candidates = (selectedObject.probabilities ?? [])
+    .filter((candidate) => candidate.className !== selectedObject.class)
+    .sort((a, b) => b.probability - a.probability)
+    .slice(0, 3);
 
-  const getStatusColor = () => {
-    switch (selectedObject.status) {
-      case 'NEW':
-        return 'text-green-400';
-      case 'LOST':
-        return 'text-red-400';
-      case 'STABLE':
-        return 'text-cyan-400';
-      case 'TRACKING':
-        return 'text-blue-400';
-      case 'CANDIDATE':
-        return 'text-amber-400';
-    }
-  };
+  const uavDecision = selectedObject.uavDecision ?? 'UNKNOWN';
+  const uavProbability = selectedObject.uavProbability ?? 0;
+  const confidence = Math.max(0, Math.min(100, selectedObject.confidence));
 
   return (
-    <div className="h-full bg-[#0a0d12] border-b border-cyan-950/50 flex flex-col relative overflow-hidden">
-      {/* Corner brackets */}
-      <div className="absolute top-4 left-6 w-4 h-4 border-l-2 border-t-2 border-cyan-500/40" />
-      <div className="absolute top-4 right-6 w-4 h-4 border-r-2 border-t-2 border-cyan-500/40" />
-
-      <div className="p-6 flex flex-col h-full overflow-auto">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-6">
+    <section className="argus-aircraft-panel argus-surface h-full border-b border-cyan-950/50 overflow-hidden">
+      <div className="argus-aircraft-body">
+        {/* Hierarchy: threat > class/confidence > motion > details */}
+        <header className="argus-aircraft-header">
           <div>
-            <div className="flex items-center gap-3">
-              <h2 className="text-3xl font-bold text-cyan-400 font-mono tracking-wide">
-                {selectedObject.id}
-              </h2>
-              <span className={`px-2 py-1 text-sm font-semibold uppercase tracking-wider ${getStatusColor()}`}>
-                {STATUS_NAMES_KR[selectedObject.status]}
-              </span>
+            <div className="argus-track-line">
+              <span className="argus-track-id">{selectedObject.id}</span>
+              <span className="argus-track-divider">|</span>
+              <span className="argus-track-status">추적 안정성 {STATUS_NAMES_KR[selectedObject.status]}</span>
             </div>
-            <p className="text-base text-gray-500 mt-1 font-mono">선택된 타겟</p>
+            <p className="argus-header-caption">선택 비행체 상태</p>
           </div>
 
-          <div className={`px-4 py-2 border rounded text-base font-semibold uppercase tracking-wider ${getRiskColor()}`}>
-            {RISK_NAMES_KR[selectedObject.riskLevel]}
+          <div className={`argus-threat-badge ${THREAT_BADGE_CLASS[selectedObject.riskLevel]}`}>
+            <span className="argus-threat-label">THREAT</span>
+            <span className="argus-threat-value">{RISK_NAMES_KR[selectedObject.riskLevel]}</span>
           </div>
-        </div>
+        </header>
 
-          {/* Classification */}
-          <div className="mb-6">
-            <div className="flex items-baseline gap-4">
-              <span className="text-5xl font-bold text-white">{CLASS_NAMES_KR[selectedObject.class]}</span>
-              <span className="text-3xl text-cyan-400 font-mono">{selectedObject.confidence.toFixed(1)}%</span>
-            </div>
-            <div className="mt-3 h-3 bg-gray-900 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-cyan-500 to-cyan-400"
-                style={{ width: `${selectedObject.confidence}%` }}
-              />
+        <div className="argus-aircraft-grid">
+          <article className="argus-aircraft-card argus-primary-card">
+            <h3 className="argus-card-title">비행체 분류</h3>
+
+            <div className="argus-primary-metrics">
+              <div>
+                <p className="argus-metric-label">PRIMARY CLASS</p>
+                <p className="argus-primary-class">{CLASS_NAMES_KR[selectedObject.class]}</p>
+              </div>
+              <div className="text-right">
+                <p className="argus-metric-label">CONFIDENCE</p>
+                <p className="argus-primary-number">{confidence.toFixed(1)}%</p>
+              </div>
             </div>
 
-            {/* Candidate Probabilities */}
-            {selectedObject.probabilities && selectedObject.probabilities.length > 1 && (
-              <div className="mt-4 space-y-2">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">추가 분류 후보</p>
-                {selectedObject.probabilities.slice(1, 4).map((prob, idx) => (
-                  <div key={idx} className="flex items-center gap-3 text-sm">
-                    <span className="w-16 text-gray-400">{CLASS_NAMES_KR[prob.className]}</span>
-                    <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-gray-600" 
-                        style={{ width: `${prob.probability}%` }}
-                      />
-                    </div>
-                    <span className="w-10 text-right font-mono text-gray-500">{prob.probability.toFixed(0)}%</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+            <div className="argus-confidence-track" aria-hidden="true">
+              <div className="argus-confidence-fill" style={{ width: `${confidence}%` }} />
+            </div>
 
-        {/* Metrics Grid */}
-        <div className="grid grid-cols-3 gap-5 flex-1">
-          {/* Position */}
-          <div className="bg-gray-900/30 border border-cyan-950/50 rounded p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Navigation className="w-5 h-5 text-cyan-500" />
-              <span className="text-sm font-bold text-gray-500 uppercase tracking-wider">위치</span>
+            <div className="argus-subsection mt-5">
+              <p className="argus-metric-label">ALTERNATIVE CANDIDATES (TOP-3)</p>
+              <ul className="argus-candidate-list mt-2">
+                {candidates.length === 0 && (
+                  <li className="argus-candidate-item argus-candidate-empty">추가 후보 없음</li>
+                )}
+                {candidates.map((candidate, index) => {
+                  const dimmed = candidate.probability < 10;
+                  return (
+                    <li
+                      key={candidate.className}
+                      className={`argus-candidate-item ${dimmed ? 'argus-candidate-dim' : ''}`}
+                    >
+                      <span className="argus-candidate-rank">#{index + 1}</span>
+                      <span className="argus-candidate-name">{CLASS_NAMES_KR[candidate.className]}</span>
+                      <span className="argus-candidate-prob">{candidate.probability.toFixed(1)}%</span>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">X:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.position.x.toFixed(1)} m</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Y:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.position.y.toFixed(1)} m</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Z:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.position.z.toFixed(1)} m</span>
-              </div>
-            </div>
-          </div>
+          </article>
 
-          {/* Velocity */}
-          <div className="bg-gray-900/30 border border-cyan-950/50 rounded p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Gauge className="w-5 h-5 text-cyan-500" />
-              <span className="text-sm font-bold text-gray-500 uppercase tracking-wider">속도</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">속력:</span>
-                <span className="text-gray-200 font-mono font-semibold text-base">{selectedObject.speed.toFixed(1)} m/s</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Vx:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.velocity.x.toFixed(1)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Vy:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.velocity.y.toFixed(1)}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Size */}
-          <div className="bg-gray-900/30 border border-cyan-950/50 rounded p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Box className="w-5 h-5 text-cyan-500" />
-              <span className="text-sm font-bold text-gray-500 uppercase tracking-wider">치수</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">길이:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.size.length.toFixed(1)} m</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">너비:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.size.width.toFixed(1)} m</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">높이:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.size.height.toFixed(1)} m</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Tracking Info */}
-          <div className="bg-gray-900/30 border border-cyan-950/50 rounded p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Clock className="w-5 h-5 text-cyan-500" />
-              <span className="text-sm font-bold text-gray-500 uppercase tracking-wider">추적</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">지속 시간:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.trackingDuration}s</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">히스토리:</span>
-                <span className="text-gray-200 font-mono text-base">{selectedObject.trackHistory.length} pts</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Distance */}
-          <div className="bg-gray-900/30 border border-cyan-950/50 rounded p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Target className="w-5 h-5 text-cyan-500" />
-              <span className="text-sm font-bold text-gray-500 uppercase tracking-wider">거리</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">범위:</span>
-                <span className="text-gray-200 font-mono font-semibold text-base">{selectedObject.distance.toFixed(1)} m</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Risk Assessment */}
-          <div className="bg-gray-900/30 border border-cyan-950/50 rounded p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <AlertTriangle className="w-5 h-5 text-cyan-500" />
-              <span className="text-sm font-bold text-gray-500 uppercase tracking-wider">평가</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">위협:</span>
-                <span className={`font-mono font-semibold text-base ${
-                  selectedObject.riskLevel === 'CRITICAL' ? 'text-red-400' :
-                  selectedObject.riskLevel === 'HIGH' ? 'text-orange-400' :
-                  selectedObject.riskLevel === 'MEDIUM' ? 'text-yellow-400' :
-                  'text-green-400'
-                }`}>
+          <div className="argus-right-stack">
+            <article className="argus-aircraft-card">
+              <h3 className="argus-card-title">평가</h3>
+              <div className="argus-eval-head">
+                <div className="argus-eval-main">
+                  <p className="argus-metric-label">위험 (THREAT LEVEL)</p>
+                  <span className={`argus-status-badge ${THREAT_BADGE_CLASS[selectedObject.riskLevel]}`}>
+                    {selectedObject.riskLevel}
+                  </span>
+                </div>
+                <p className={`argus-eval-threat-right ${THREAT_TEXT_CLASS[selectedObject.riskLevel]}`}>
                   {RISK_NAMES_KR[selectedObject.riskLevel]}
+                </p>
+              </div>
+
+              <div className="argus-detail-list mt-2">
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label">UAV 판정</span>
+                  <span className={`argus-status-badge ${UAV_BADGE_CLASS[uavDecision]}`}>
+                    {UAV_DECISION_NAMES[uavDecision]} {uavProbability.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label">모델</span>
+                  <span className="argus-detail-value">{selectedObject.inferenceModelVersion || '-'}</span>
+                </div>
+              </div>
+            </article>
+
+            <article className="argus-aircraft-card">
+              <h3 className="argus-card-title">이동 정보</h3>
+              <div className="argus-kpi-grid">
+                <div className="argus-kpi-item">
+                  <p className="argus-metric-label">거리 (m)</p>
+                  <p className="argus-kpi-number">{selectedObject.distance.toFixed(1)}</p>
+                </div>
+                <div className="argus-kpi-item">
+                  <p className="argus-metric-label">속력 (m/s)</p>
+                  <p className="argus-kpi-number">{selectedObject.speed.toFixed(1)}</p>
+                </div>
+              </div>
+
+              <div className="argus-detail-row mt-2">
+                <span className="argus-detail-label flex items-center gap-1">
+                  <Navigation className="w-3.5 h-3.5" />
+                  좌표 (x, y, z)
+                </span>
+                <span className="argus-detail-value argus-mono">
+                  ({selectedObject.position.x.toFixed(1)}, {selectedObject.position.y.toFixed(1)},{' '}
+                  {selectedObject.position.z.toFixed(1)})
                 </span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">UAV 판정:</span>
-                <span
-                  className={`font-mono font-semibold text-base ${
-                    selectedObject.uavDecision === 'UAV'
-                      ? 'text-red-300'
-                      : selectedObject.uavDecision === 'NON_UAV'
-                      ? 'text-green-300'
-                      : 'text-gray-400'
-                  }`}
-                >
-                  {selectedObject.uavDecision === 'UAV'
-                    ? 'UAV'
-                    : selectedObject.uavDecision === 'NON_UAV'
-                    ? 'NON-UAV'
-                    : 'UNKNOWN'}{' '}
-                  ({(selectedObject.uavProbability ?? 0).toFixed(1)}%)
-                </span>
+            </article>
+
+            <article className="argus-aircraft-card">
+              <h3 className="argus-card-title">치수</h3>
+              <div className="argus-detail-list">
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label flex items-center gap-1">
+                    <Target className="w-3.5 h-3.5" />
+                    길이 (m)
+                  </span>
+                  <span className="argus-kpi-number argus-small-kpi">{selectedObject.size.length.toFixed(1)}</span>
+                </div>
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label flex items-center gap-1">
+                    <Box className="w-3.5 h-3.5" />
+                    너비 (m)
+                  </span>
+                  <span className="argus-kpi-number argus-small-kpi">{selectedObject.size.width.toFixed(1)}</span>
+                </div>
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    높이 (m)
+                  </span>
+                  <span className="argus-kpi-number argus-small-kpi">{selectedObject.size.height.toFixed(1)}</span>
+                </div>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">모델:</span>
-                <span className="text-gray-300 font-mono text-base">
-                  {selectedObject.inferenceModelVersion || '-'}
-                </span>
-              </div>
-            </div>
+            </article>
           </div>
         </div>
       </div>
-    </div>
+    </section>
   );
 }

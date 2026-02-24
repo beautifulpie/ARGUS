@@ -1,6 +1,5 @@
 import { DetectedObject } from '../types';
-import { AlertTriangle, Radio } from 'lucide-react';
-import { ScrollArea } from './ui/scroll-area';
+import { Radio } from 'lucide-react';
 
 interface CandidateTracksPanelProps {
   objects: DetectedObject[];
@@ -18,76 +17,138 @@ const CLASS_NAMES_KR: Record<string, string> = {
 };
 
 export function CandidateTracksPanel({ objects, onSelectObject }: CandidateTracksPanelProps) {
-  const candidates = objects.filter(obj => obj.status === 'CANDIDATE');
+  const candidates = objects.filter((obj) => obj.status === 'CANDIDATE');
+
+  const getRiskBadge = (riskLevel: string): { label: string; className: string } => {
+    switch (riskLevel) {
+      case 'CRITICAL':
+        return {
+          label: '치명',
+          className: 'border-2 border-red-500 bg-red-950/45 text-red-100 font-bold',
+        };
+      case 'HIGH':
+        return {
+          label: '높음',
+          className: 'border border-red-600/70 bg-red-950/30 text-red-200',
+        };
+      case 'MEDIUM':
+        return {
+          label: '중간',
+          className: 'border border-orange-600/70 bg-orange-950/30 text-orange-200',
+        };
+      case 'LOW':
+      default:
+        return {
+          label: '낮음',
+          className: 'border border-slate-600/70 bg-slate-900/70 text-slate-200',
+        };
+    }
+  };
+
+  const getUavBadge = (decision?: string) => {
+    switch (decision) {
+      case 'UAV':
+        return 'border-red-700/70 bg-red-950/45 text-red-200';
+      case 'NON_UAV':
+        return 'border-sky-700/60 bg-sky-950/30 text-sky-200';
+      default:
+        return 'border-amber-700/55 bg-amber-950/30 text-amber-200';
+    }
+  };
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0d12] border-t border-cyan-950/50">
-      <div className="px-6 py-4 border-b border-cyan-950/50 flex items-center justify-between">
+    <div className="argus-surface flex flex-col h-full bg-[#0b1016] border-t border-cyan-950/50">
+      <div className="px-6 py-[18px] border-b border-cyan-950/50 flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-amber-500 uppercase tracking-wider flex items-center gap-2">
-            <Radio className="w-5 h-5 animate-pulse" />
+          <h2 className="text-2xl font-bold text-amber-400 uppercase tracking-[0.08em] flex items-center gap-2">
+            <Radio className="w-5 h-5" />
             후보 추적군
           </h2>
-          <p className="text-xs text-gray-500 mt-1 font-mono">신호 손실 / 예측 추적 중</p>
+          <p className="text-xs text-slate-500 mt-1">신호 손실 / 예측 추적 중</p>
         </div>
-        <span className="bg-amber-900/30 text-amber-500 text-xs px-2 py-1 rounded font-mono">
+        <span className="candidate-active-chip inline-flex items-center border border-amber-700/60 bg-amber-950/35 text-amber-200 text-xs px-2.5 py-1 rounded font-semibold tabular-nums">
           {candidates.length} ACTIVE
         </span>
       </div>
-      
-      <ScrollArea className="flex-1 min-h-[150px]">
-        <div className="p-4 space-y-3">
-          {candidates.length === 0 ? (
-            <div className="text-center py-10 text-gray-600">
-              <p className="text-sm">현재 후보 추적군 없음</p>
-            </div>
-          ) : (
-            candidates.map(obj => (
-              <div 
-                key={obj.id}
-                onClick={() => onSelectObject(obj.id)}
-                className="bg-[#111827] border border-amber-900/30 rounded p-3 cursor-pointer hover:border-amber-500/50 transition-colors group"
-              >
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-amber-400 font-mono text-sm font-bold group-hover:text-amber-300">
-                    {obj.id}
-                  </span>
-                  <span className="text-xs text-amber-600 flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3" />
-                    신호 불안정
-                  </span>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-2 text-xs text-gray-400 mb-2">
-                  <div>
-                    <span className="block text-gray-600 uppercase text-[10px]">분류</span>
-                    {CLASS_NAMES_KR[obj.class]}
-                  </div>
-                  <div>
-                    <span className="block text-gray-600 uppercase text-[10px]">신뢰도</span>
-                    <span className="text-amber-500">{obj.confidence.toFixed(1)}%</span>
-                  </div>
-                  <div>
-                    <span className="block text-gray-600 uppercase text-[10px]">UAV 확률</span>
-                    <span className="text-red-300">{(obj.uavProbability ?? 0).toFixed(1)}%</span>
-                  </div>
-                  <div>
-                    <span className="block text-gray-600 uppercase text-[10px]">UAV 판정</span>
-                    <span className="text-amber-300">{obj.uavDecision || 'UNKNOWN'}</span>
-                  </div>
-                </div>
 
-                <div className="w-full bg-gray-800 h-1 rounded overflow-hidden">
-                  <div 
-                    className="bg-amber-600 h-full animate-pulse" 
-                    style={{ width: `${obj.confidence}%` }}
-                  />
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </ScrollArea>
+      <div className="flex-1 overflow-auto">
+        {candidates.length === 0 ? (
+          <div className="flex items-center justify-center h-36">
+            <p className="text-base text-slate-500">현재 후보 추적군 없음</p>
+          </div>
+        ) : (
+          <table className="w-full text-[13px] leading-[1.35]">
+            <thead className="sticky top-0 z-10 bg-[#0f161f]/95 backdrop-blur border-b border-slate-700/70">
+              <tr className="text-slate-400 uppercase tracking-[0.08em]">
+                <th className="px-4 py-3.5 text-left font-semibold whitespace-nowrap">위험</th>
+                <th className="px-4 py-3.5 text-left font-semibold whitespace-nowrap">UAV 판정</th>
+                <th className="px-4 py-3.5 text-left font-semibold whitespace-nowrap">ID</th>
+                <th className="px-4 py-3.5 text-left font-semibold whitespace-nowrap">클래스</th>
+                <th className="px-4 py-3.5 text-right font-semibold whitespace-nowrap">거리 (m)</th>
+                <th className="px-4 py-3.5 text-right font-semibold whitespace-nowrap">속도 (m/s)</th>
+                <th className="px-4 py-3.5 text-right font-semibold whitespace-nowrap">신뢰도 (%)</th>
+                <th className="px-4 py-3.5 text-left font-semibold whitespace-nowrap">상태</th>
+              </tr>
+            </thead>
+            <tbody>
+              {candidates.map((obj, index) => {
+                const riskBadge = getRiskBadge(obj.riskLevel);
+                const zebraClass = index % 2 === 0 ? 'bg-[#0c1219]' : 'bg-[#0a0f15]';
+
+                return (
+                  <tr
+                    key={obj.id}
+                    onClick={() => onSelectObject(obj.id)}
+                    className={`argus-object-row border-b border-slate-800/70 cursor-pointer transition-colors duration-150 ${zebraClass} hover:bg-slate-800/60`}
+                  >
+                    <td className="px-4 py-3.5">
+                      <span
+                        className={`inline-flex items-center px-2.5 py-1 border rounded-sm text-xs font-semibold whitespace-nowrap ${riskBadge.className}`}
+                      >
+                        {riskBadge.label}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-1 border rounded-sm text-xs font-semibold whitespace-nowrap ${getUavBadge(obj.uavDecision)}`}
+                        >
+                          {obj.uavDecision === 'UAV'
+                            ? 'UAV'
+                            : obj.uavDecision === 'NON_UAV'
+                              ? 'NON-UAV'
+                              : 'UNKNOWN'}
+                        </span>
+                        <span className="text-xs font-mono tabular-nums text-slate-400">
+                          {(obj.uavProbability ?? 0).toFixed(1)}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <span className="font-mono tabular-nums text-slate-100">{obj.id}</span>
+                    </td>
+                    <td className="px-4 py-3.5 text-slate-200">{CLASS_NAMES_KR[obj.class] ?? obj.class}</td>
+                    <td className="px-4 py-3.5 text-right">
+                      <span className="font-mono tabular-nums text-slate-200">{obj.distance.toFixed(1)}</span>
+                    </td>
+                    <td className="px-4 py-3.5 text-right">
+                      <span className="font-mono tabular-nums text-slate-200">{obj.speed.toFixed(1)}</span>
+                    </td>
+                    <td className="px-4 py-3.5 text-right">
+                      <span className="font-mono tabular-nums text-slate-200">{obj.confidence.toFixed(1)}</span>
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <span className="inline-flex items-center px-2.5 py-1 border rounded-sm text-xs font-semibold uppercase tracking-[0.06em] whitespace-nowrap border-amber-700/60 bg-amber-950/35 text-amber-200">
+                        후보
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

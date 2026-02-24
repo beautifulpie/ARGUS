@@ -16,6 +16,11 @@ export interface ClassProbability {
   probability: number;
 }
 
+export interface GeoPosition {
+  lat: number;
+  lon: number;
+}
+
 // LiDAR detected object
 export interface DetectedObject {
   id: string;
@@ -33,12 +38,16 @@ export interface DetectedObject {
   timestamp: Date;
   trackHistory: { x: number; y: number }[]; // For trail visualization
   predictedPath: { x: number; y: number }[]; // Future path prediction
-  // UAV binary classification from Python inference service
+  geoPosition?: GeoPosition;
+  geoTrackHistory?: GeoPosition[];
+  geoPredictedPath?: GeoPosition[];
+  // Derived UAV compatibility fields from ARGUS-Brain multi-class inference
   uavDecision?: UavDecision;
   uavProbability?: number; // 0-100
   uavThreshold?: number; // 0-100
   featureWindowMs?: number;
   inferenceModelVersion?: string;
+  inferenceLatencyMs?: number;
 }
 
 export interface ClassificationResult {
@@ -55,6 +64,7 @@ export interface TimelineEvent {
   type: EventType;
   message: string;
   objectId?: string; // Optional reference to object
+  objectClass?: ObjectClass | 'UNKNOWN';
 }
 
 export interface SystemStatus {
@@ -71,6 +81,9 @@ export interface SystemStatus {
   cpuUsage: number; // 0-100
   gpuUsage: number; // 0-100
   ramUsage: number; // 0-100
+  measuredFps?: number;
+  modelLatencyP50?: number;
+  modelLatencyP95?: number;
   inferenceLatencyP50?: number;
   inferenceLatencyP95?: number;
   pipelineLatencyP95?: number;
