@@ -13,7 +13,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# Keep script executable directly: python3 python-service/app/main.py
+# Keep script executable directly: python3 ARGUS-Brain/app/main.py
 import sys
 
 CURRENT_DIR = Path(__file__).resolve().parent

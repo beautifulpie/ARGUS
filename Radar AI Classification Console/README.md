@@ -1,98 +1,79 @@
+# ARGUS
 
-  # Radar AI Classification Console
+**Aerial Radar-based Guard for UAV Surveillance**
 
-  This is a code bundle for Radar AI Classification Console. The original project is available at https://www.figma.com/design/awT2Vcm0KbGxGuBI232ss6/Radar-AI-Classification-Console.
+ARGUS는 레이더 기반 항적을 실시간으로 감시하고 UAV 위협을 분류하는 통합 플랫폼입니다.  
+프로젝트 이름은 그리스 로마신화의 거인 **Argus**(1000개의 눈)에서 가져왔고, "놓치지 않는 감시"라는 철학을 담고 있습니다.
 
-  ## Running the code
+## Repository Structure
 
-  Run `npm i` to install the dependencies.
+현재 레포는 아래 3개 영역으로 정리되어 있습니다.
 
-  Run `npm run dev` to start the development server.
+- **ARGUS (Main Frame)**: 웹 콘솔 + Electron 런타임 (레포 루트)
+- **ARGUS-Brain**: UAV 분류 AI 모델 서비스 (`/ARGUS-Brain`)
+- **ARGUS-Eye**: 신호 처리/특징 추출 모델 (`/ARGUS-Eye`)
 
-  ## Python UAV inference service
+## ARGUS (Main Frame)
 
-  The repository includes a local Python service at `python-service/` that performs UAV binary classification.
+레이더 객체, 이벤트, 시스템 상태를 시각화하고 Electron에서 모델 서비스를 함께 실행합니다.
 
-  ```bash
-  cd python-service
-  python3 -m venv .venv
-  source .venv/bin/activate
-  pip install -r requirements.txt
-  python app/main.py
-  ```
+```bash
+npm i
+npm run dev
+```
 
-  Default service URL: `http://127.0.0.1:8787`
+Electron 실행:
 
-  Model hot-swap is supported in the Python service:
-  - register/list/activate/remove models with `/api/v1/models*` endpoints
-  - keep `heuristic-default` as safe fallback
-  - optional startup envs: `RADAR_MODEL_PATH`, `RADAR_ACTIVE_MODEL_ID`
+- Dev: `npm run electron:dev`
+- Start (build 후): `npm run electron:start`
+- Windows 배포: `npm run electron:dist`
 
-  ## Electron app mode
+## ARGUS-Brain
 
-  Electron runs the web console and starts the Python service as a child process.
+항적 기반 UAV/Non-UAV 이진 분류 서비스입니다.
 
-  - Dev mode: `npm run electron:dev`
-  - Direct launch (after web build): `npm run electron:start`
-  - Windows package build: `npm run electron:dist`
+```bash
+cd ARGUS-Brain
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app/main.py
+```
 
-  In Electron mode, renderer is automatically configured with:
-  - `argusBaseUrl=http://127.0.0.1:<RADAR_INFER_PORT>`
-  - polling period target for near-real-time updates (default 200ms)
+기본 URL: `http://127.0.0.1:8787`
 
-  ## ARGUS Integration
+주요 API:
 
-  This console now supports live polling from ARGUS.
+- `GET /healthz`
+- `GET /api/v1/radar/frame`
+- `POST /api/v1/config/reload`
+- `GET /api/v1/models`
+- `POST /api/v1/models/register`
+- `POST /api/v1/models/activate`
+- `DELETE /api/v1/models/{model_id}`
 
-  1. Create `.env.local` in project root.
-  2. Add at least `VITE_ARGUS_BASE_URL`.
-  3. Start the app with `npm run dev`.
+## ARGUS-Eye
 
-  Example:
+신호 처리 전용 모듈입니다. 현재는 특징 추출 파이프라인의 기본 스켈레톤을 제공합니다.
 
-  ```bash
-  VITE_ARGUS_BASE_URL=http://localhost:8080
-  VITE_ARGUS_FRAME_PATH=/api/v1/radar/frame
-  VITE_ARGUS_AUTH_TOKEN=
-  VITE_ARGUS_POLL_INTERVAL_MS=200
-  VITE_ARGUS_TIMEOUT_MS=1000
-  VITE_ARGUS_FALLBACK_TO_MOCK=true
-  ```
+```bash
+cd ARGUS-Eye
+python3 -c "from app.pipeline import ArgusEyeProcessor; print('ARGUS-Eye ready')"
+```
 
-  - `VITE_ARGUS_BASE_URL` is empty: app runs in existing mock mode.
-  - `VITE_ARGUS_BASE_URL` is set: app switches to ARGUS bridge mode.
-  - `VITE_ARGUS_FALLBACK_TO_MOCK=true`: on ARGUS fetch failure, mock simulation continues.
+## Integration Environment
 
-  Expected ARGUS frame response (flexible keys are also supported):
+`.env.local` 예시:
 
-  ```json
-  {
-    "objects": [
-      {
-        "id": "TRK-0001",
-        "class": "UAV",
-        "confidence": 92.5,
-        "position": { "x": 12.5, "y": -3.1, "z": 350.0 },
-        "velocity": { "x": 1.2, "y": -0.4, "z": 0.0 },
-        "status": "TRACKING",
-        "riskLevel": "HIGH"
-      }
-    ],
-    "events": [
-      {
-        "id": "evt-1",
-        "type": "WARNING",
-        "message": "High-speed approach detected",
-        "objectId": "TRK-0001",
-        "timestamp": "2026-02-24T12:00:00Z"
-      }
-    ],
-    "systemStatus": {
-      "modelName": "ARGUS",
-      "modelVersion": "v1.0.0",
-      "latency": 8.2,
-      "fps": 30.0
-    }
-  }
-  ```
-  
+```bash
+VITE_ARGUS_BASE_URL=http://localhost:8080
+VITE_ARGUS_FRAME_PATH=/api/v1/radar/frame
+VITE_ARGUS_AUTH_TOKEN=
+VITE_ARGUS_POLL_INTERVAL_MS=200
+VITE_ARGUS_TIMEOUT_MS=1000
+VITE_ARGUS_FALLBACK_TO_MOCK=true
+```
+
+- `VITE_ARGUS_BASE_URL` 미설정: mock 모드
+- `VITE_ARGUS_BASE_URL` 설정: ARGUS 브리지 모드
+- `VITE_ARGUS_FALLBACK_TO_MOCK=true`: 연동 실패 시 mock 폴백

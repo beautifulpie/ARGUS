@@ -12,7 +12,7 @@
     "electron:start": "electron .",
     "electron:dev": "node scripts/dev-electron.cjs",
     "electron:dist": "npm run build:web && electron-builder --win --publish never",
-    "python:check": "python3 -m py_compile python-service/app/*.py"
+    "python:check": "python3 -m py_compile ARGUS-Brain/app/*.py ARGUS-Eye/app/*.py"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -105,8 +105,8 @@
     ],
     "extraResources": [
       {
-        "from": "python-service",
-        "to": "python-service"
+        "from": "ARGUS-Brain",
+        "to": "ARGUS-Brain"
       }
     ],
     "win": {

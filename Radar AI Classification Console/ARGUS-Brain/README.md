@@ -1,9 +1,11 @@
-# Python UAV Inference Service
+# ARGUS-Brain
+
+Python UAV classification model service for ARGUS.
 
 ## Run locally
 
 ```bash
-cd python-service
+cd ARGUS-Brain
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt

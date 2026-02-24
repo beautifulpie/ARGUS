@@ -5,9 +5,12 @@ dist/
 *:Zone.Identifier
 
 # Python local environment
-python-service/.venv/
-python-service/__pycache__/
-python-service/**/*.pyc
+ARGUS-Brain/.venv/
+ARGUS-Brain/__pycache__/
+ARGUS-Brain/**/*.pyc
+ARGUS-Eye/.venv/
+ARGUS-Eye/__pycache__/
+ARGUS-Eye/**/*.pyc
 
 # OS/editor
 .DS_Store

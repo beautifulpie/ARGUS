@@ -106,7 +106,7 @@ const broadcastRuntimeStatus = () => {
 const resolveInferCommand = () => {
   const packagedExe = path.join(
     process.resourcesPath,
-    'python-service',
+    'ARGUS-Brain',
     process.platform === 'win32' ? 'radar_infer.exe' : 'radar_infer'
   );
 
@@ -118,7 +118,7 @@ const resolveInferCommand = () => {
     };
   }
 
-  const bundledScript = path.join(process.resourcesPath, 'python-service', 'app', 'main.py');
+  const bundledScript = path.join(process.resourcesPath, 'ARGUS-Brain', 'app', 'main.py');
   if (fs.existsSync(bundledScript)) {
     return {
       command:
@@ -128,7 +128,7 @@ const resolveInferCommand = () => {
     };
   }
 
-  const localScript = path.join(app.getAppPath(), 'python-service', 'app', 'main.py');
+  const localScript = path.join(app.getAppPath(), 'ARGUS-Brain', 'app', 'main.py');
   return {
     command:
       process.env.RADAR_PYTHON_EXECUTABLE || (process.platform === 'win32' ? 'python' : 'python3'),
