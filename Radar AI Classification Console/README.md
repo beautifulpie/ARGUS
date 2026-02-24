@@ -2,6 +2,9 @@
 
 **Aerial Radar-based Guard for UAV Surveillance**
 
+<img width="1129" height="489" alt="image" src="https://github.com/user-attachments/assets/ad1b2619-4084-462d-8618-977b6aa09898" />
+
+
 ARGUS는 레이더 기반 항적을 실시간으로 감시하고 UAV 위협을 분류하는 통합 플랫폼입니다.  
 프로젝트 이름은 100개의 눈을 가진 그리스 로마신화의 거인 **Argus**에서 가져왔고, "놓치지 않는 감시"라는 철학을 담고 있습니다.
 
