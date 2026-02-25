@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Settings2, X } from 'lucide-react';
+import { FolderOpen, Settings2, X } from 'lucide-react';
 
 export type DetectionMode = 'ACCURACY' | 'SPEED';
 export type MapThemeMode = 'DARK' | 'LIGHT';
@@ -15,6 +15,8 @@ export interface ConsoleSettings {
   detectionMode: DetectionMode;
   mapLabelLevel: MapLabelLevel;
   mapTheme: MapThemeMode;
+  showUtmGrid: boolean;
+  showMgrsLabels: boolean;
   mapDataPath: string;
   mapDataLoadNonce: number;
 }
@@ -33,6 +35,21 @@ interface SettingsDialogProps {
   onClose: () => void;
   onSave: (settings: ConsoleSettings) => void;
   onPreviewThemeChange: (theme: MapThemeMode | null) => void;
+}
+
+interface DirectoryPickerOptions {
+  title?: string;
+  defaultPath?: string;
+}
+
+interface DirectoryPickerResult {
+  canceled?: boolean;
+  path?: string | null;
+  error?: string;
+}
+
+interface RadarRuntimeBridge {
+  pickDirectory?: (options?: DirectoryPickerOptions) => Promise<DirectoryPickerResult | null | undefined>;
 }
 
 export function SettingsDialog({
@@ -71,6 +88,38 @@ export function SettingsDialog({
     });
     return map;
   }, [presets]);
+
+  const handlePickDirectory = async (target: 'modelPath' | 'mapDataPath') => {
+    if (typeof window === 'undefined') return;
+
+    const runtime = (window as Window & { radarRuntime?: RadarRuntimeBridge }).radarRuntime;
+    if (!runtime || typeof runtime.pickDirectory !== 'function') {
+      setErrorMessage('파일 탐색기는 Electron 데스크톱 앱에서만 사용할 수 있습니다.');
+      return;
+    }
+
+    try {
+      const currentValue = target === 'modelPath' ? draft.modelPath : draft.mapDataPath;
+      const result = await runtime.pickDirectory({
+        title: target === 'modelPath' ? '모델 디렉토리 선택' : '지도 데이터 디렉토리 선택',
+        defaultPath: currentValue?.trim() || undefined,
+      });
+      if (result?.error) {
+        setErrorMessage(`경로 탐색 실패: ${result.error}`);
+        return;
+      }
+      if (!result || result.canceled || !result.path) return;
+
+      const selectedPath = target === 'mapDataPath' ? result.path.replace(/\\/g, '/') : result.path;
+      setDraft((prev) => ({
+        ...prev,
+        [target]: selectedPath,
+      }));
+      setErrorMessage('');
+    } catch {
+      setErrorMessage('경로 선택 중 오류가 발생했습니다.');
+    }
+  };
 
   const handleApplyPositionCode = () => {
     const key = draft.positionCode.trim().toUpperCase();
@@ -163,7 +212,7 @@ export function SettingsDialog({
               <button
                 type="button"
                 onClick={handleApplyPositionCode}
-                className="h-10 px-3 rounded border border-cyan-700/70 bg-cyan-900/30 text-cyan-100 text-xs font-semibold hover:bg-cyan-800/40 whitespace-nowrap"
+                className="argus-settings-code-apply-button h-10 px-3 rounded border border-cyan-700/70 bg-cyan-900/30 text-cyan-100 text-xs font-semibold hover:bg-cyan-800/40 whitespace-nowrap"
               >
                 코드 적용
               </button>
@@ -215,17 +264,31 @@ export function SettingsDialog({
           <section className="rounded border border-cyan-900/60 bg-[#0d1721] p-4">
             <h3 className="text-sm font-semibold text-cyan-300">모델 설정</h3>
             <p className="text-xs text-gray-400 mt-1">ARGUS Brain 모델 파일/디렉터리 경로를 지정합니다.</p>
-            <input
-              value={draft.modelPath}
-              onChange={(event) =>
-                setDraft((prev) => ({
-                  ...prev,
-                  modelPath: event.target.value,
-                }))
-              }
-              placeholder="/home/jung/models/argus_brain_multiclass.pt"
-              className="mt-3 h-10 w-full rounded border border-cyan-900/70 bg-[#09121a] px-3 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-cyan-500"
-            />
+            <div className="mt-3 flex flex-col md:flex-row gap-2">
+              <input
+                value={draft.modelPath}
+                onChange={(event) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    modelPath: event.target.value,
+                  }))
+                }
+                placeholder="/home/jung/models/argus_brain"
+                className="h-10 flex-1 rounded border border-cyan-900/70 bg-[#09121a] px-3 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  void handlePickDirectory('modelPath');
+                }}
+                className="argus-settings-path-browse-button h-10 px-3 rounded border border-cyan-700/70 bg-cyan-900/25 text-xs text-cyan-100 hover:bg-cyan-800/35 whitespace-nowrap"
+              >
+                <span className="inline-flex items-center gap-1">
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  경로 탐색
+                </span>
+              </button>
+            </div>
           </section>
 
           <section className="rounded border border-cyan-900/60 bg-[#0d1721] p-4">
@@ -351,16 +414,96 @@ export function SettingsDialog({
                         mapTheme: 'LIGHT',
                       }))
                     }
-                    className={`px-3 py-2 rounded border text-xs font-semibold ${
-                      draft.mapTheme === 'LIGHT'
-                        ? 'settings-option-selected border-cyan-500 bg-cyan-900/35 text-cyan-100'
-                        : 'border-cyan-900/70 bg-[#09121a] text-gray-300'
-                    }`}
-                  >
-                    화이트 테마
+                  className={`px-3 py-2 rounded border text-xs font-semibold ${
+                    draft.mapTheme === 'LIGHT'
+                      ? 'settings-option-selected border-cyan-500 bg-cyan-900/35 text-cyan-100'
+                      : 'border-cyan-900/70 bg-[#09121a] text-gray-300'
+                  }`}
+                >
+                    라이트 테마
                   </button>
                 </div>
               </div>
+            </div>
+            <div className="mt-4">
+              <label className="text-xs text-gray-300 block mb-2">UTM Grid 표시</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      showUtmGrid: true,
+                    }))
+                  }
+                  className={`px-3 py-2 rounded border text-xs font-semibold ${
+                    draft.showUtmGrid
+                      ? 'settings-option-selected border-cyan-500 bg-cyan-900/35 text-cyan-100'
+                      : 'border-cyan-900/70 bg-[#09121a] text-gray-300'
+                  }`}
+                >
+                  표시
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      showUtmGrid: false,
+                    }))
+                  }
+                  className={`px-3 py-2 rounded border text-xs font-semibold ${
+                    !draft.showUtmGrid
+                      ? 'settings-option-selected border-cyan-500 bg-cyan-900/35 text-cyan-100'
+                      : 'border-cyan-900/70 bg-[#09121a] text-gray-300'
+                  }`}
+                >
+                  숨김
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-500">
+                UTM Zone 51N/52N 및 경계(120E/126E/132E)를 참고용 오버레이로 표시합니다.
+              </p>
+            </div>
+            <div className="mt-4">
+              <label className="text-xs text-gray-300 block mb-2">MGRS 100km 라벨 표시</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      showMgrsLabels: true,
+                    }))
+                  }
+                  className={`px-3 py-2 rounded border text-xs font-semibold ${
+                    draft.showMgrsLabels
+                      ? 'settings-option-selected border-cyan-500 bg-cyan-900/35 text-cyan-100'
+                      : 'border-cyan-900/70 bg-[#09121a] text-gray-300'
+                  }`}
+                >
+                  표시
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      showMgrsLabels: false,
+                    }))
+                  }
+                  className={`px-3 py-2 rounded border text-xs font-semibold ${
+                    !draft.showMgrsLabels
+                      ? 'settings-option-selected border-cyan-500 bg-cyan-900/35 text-cyan-100'
+                      : 'border-cyan-900/70 bg-[#09121a] text-gray-300'
+                  }`}
+                >
+                  숨김
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-500">
+                HF/HG 형태의 100km Grid Square ID를 셀 중심에 은은하게 표기합니다.
+              </p>
             </div>
             <div className="mt-4">
               <label className="text-xs text-gray-300 block">지도 데이터 경로</label>
@@ -381,6 +524,18 @@ export function SettingsDialog({
                 />
                 <button
                   type="button"
+                  onClick={() => {
+                    void handlePickDirectory('mapDataPath');
+                  }}
+                  className="argus-settings-path-browse-button h-10 px-3 rounded border border-cyan-700/70 bg-cyan-900/25 text-xs text-cyan-100 hover:bg-cyan-800/35 whitespace-nowrap"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    경로 탐색
+                  </span>
+                </button>
+                <button
+                  type="button"
                   onClick={() =>
                     setDraft((prev) => ({
                       ...prev,
@@ -399,7 +554,7 @@ export function SettingsDialog({
                       mapDataLoadNonce: (prev.mapDataLoadNonce || 0) + 1,
                     }))
                   }
-                  className="h-10 px-3 rounded border border-cyan-700/70 bg-cyan-900/25 text-xs text-cyan-100 hover:bg-cyan-800/35 whitespace-nowrap"
+                  className="argus-settings-reload-button h-10 px-3 rounded border border-cyan-700/70 bg-cyan-900/25 text-xs text-cyan-100 hover:bg-cyan-800/35 whitespace-nowrap"
                 >
                   데이터 다시 불러오기
                 </button>
@@ -421,7 +576,7 @@ export function SettingsDialog({
           <button
             type="button"
             onClick={handleSave}
-            className="h-9 px-3 rounded border border-cyan-700/70 bg-cyan-900/35 text-cyan-100 text-sm font-semibold hover:bg-cyan-800/45"
+            className="argus-settings-save-button h-9 px-3 rounded border border-cyan-700/70 bg-cyan-900/35 text-cyan-100 text-sm font-semibold hover:bg-cyan-800/45"
           >
             설정 적용
           </button>

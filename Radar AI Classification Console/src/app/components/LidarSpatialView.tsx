@@ -1,14 +1,17 @@
 import { useRef, useEffect, useState } from 'react';
 import { DetectedObject, ObjectClass } from '../types';
+import { encodeMgrsFromLatLon, extract100kIdFromMgrs } from '../lib/mgrsLocal';
 
 interface LidarSpatialViewProps {
   objects: DetectedObject[];
   selectedObjectId: string | null;
   onSelectObject: (id: string | null) => void;
   mapCenter: GeoPoint;
-  onMapCenterChange: (center: GeoPoint) => void;
+  detectionMode: 'ACCURACY' | 'SPEED';
   mapTheme: 'DARK' | 'LIGHT';
   mapLabelLevel: 'PROVINCE' | 'DISTRICT' | 'EMD';
+  showUtmGrid: boolean;
+  showMgrsLabels: boolean;
   mapDataPath: string;
   mapDataLoadNonce: number;
 }
@@ -66,6 +69,36 @@ interface AdminLabelLayers {
   emd: GeoLabel[];
 }
 
+type UtmGridSpacing = 1000 | 10000;
+
+interface UtmGridLine {
+  points: GeoPoint[];
+  spacingMeters: UtmGridSpacing;
+}
+
+interface UtmGridViewportBounds {
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+}
+
+interface UtmGridData {
+  zone: 51 | 52;
+  epsg: 32651 | 32652;
+  zoom: number;
+  majorLines: UtmGridLine[];
+  minorLines: UtmGridLine[];
+  mgrs100kmLabels: Mgrs100kmLabel[];
+  viewportSignature: string;
+}
+
+interface Mgrs100kmLabel {
+  id: string;
+  label: string;
+  point: GeoPoint;
+}
+
 interface TileState {
   image: HTMLImageElement;
   loaded: boolean;
@@ -77,6 +110,34 @@ interface DragState {
   moved: boolean;
   lastX: number;
   lastY: number;
+}
+
+interface GeoJsonDirectoryReadResult {
+  ok?: boolean;
+  path?: string | null;
+  data?: unknown;
+  error?: string;
+}
+
+interface RadarRuntimeBridge {
+  readGeoJsonFromDirectory?: (payload: {
+    basePath: string;
+    fileNames: string[];
+  }) => Promise<GeoJsonDirectoryReadResult | null | undefined>;
+}
+
+interface UtmGridThemeStyle {
+  majorLineColor: string;
+  minorLineColor: string;
+  majorLineWidth: number;
+  minorLineWidth: number;
+  majorLineDash: number[];
+  minorLineDash: number[];
+  mgrsLabelFill: string;
+  mgrsLabelStroke: string;
+  mgrsLabelFontSize: number;
+  mgrsLabelFontSizeZoomed: number;
+  mgrsLabelLetterSpacing: number;
 }
 
 const KOREA_BOUNDS = {
@@ -112,6 +173,217 @@ const OFFICIAL_TERRITORIAL_FILES = [
 ];
 const OFFICIAL_AIRSPACE_FILES = ['airspace_boundary.geojson', 'airspace.geojson', 'fir.geojson'];
 const OFFICIAL_EMD_LABEL_FILES = ['emd_labels.geojson', 'emd.geojson', 'eupmyeondong.geojson'];
+const UTM_GRID_SOURCE_ID = 'argus-utm-grid';
+const UTM_GRID_10KM_LAYER_ID = 'argus-utm-10km';
+const UTM_GRID_1KM_LAYER_ID = 'argus-utm-1km';
+const UTM_GRID_LAYER_SIGNATURE = `${UTM_GRID_SOURCE_ID}:${UTM_GRID_10KM_LAYER_ID}:${UTM_GRID_1KM_LAYER_ID}`;
+const UTM_GRID_DEBOUNCE_MS = 90;
+const UTM_GRID_LINE_SAMPLE_STEPS = 12;
+const UTM_GRID_MAX_MAJOR_LINE_COUNT = 420;
+const UTM_GRID_MAX_MINOR_LINE_COUNT = 900;
+const UTM_GRID_MAJOR_STEP_METERS = 10_000;
+const UTM_GRID_MINOR_STEP_METERS = 1_000;
+const UTM_GRID_MGRS_STEP_METERS = 100_000;
+const UTM_GRID_MGRS_MIN_LABEL_DISTANCE_PX = 120;
+const UTM_ZONE_HYSTERESIS_MIN_LON = 125.7;
+const UTM_ZONE_HYSTERESIS_MAX_LON = 126.3;
+const UTM_GRID_MGRS_CACHE_MAX = 96;
+const utmMgrsLabelCache = new Map<string, Mgrs100kmLabel[]>();
+
+const UTM_GRID_THEME_STYLE: Record<'DARK' | 'LIGHT', UtmGridThemeStyle> = {
+  LIGHT: {
+    majorLineColor: 'rgba(60, 90, 120, 0.18)',
+    minorLineColor: 'rgba(60, 90, 120, 0.08)',
+    majorLineWidth: 1.4,
+    minorLineWidth: 1,
+    majorLineDash: [7, 6],
+    minorLineDash: [3, 7],
+    mgrsLabelFill: 'rgba(60, 90, 120, 0.22)',
+    mgrsLabelStroke: 'rgba(255, 255, 255, 0.25)',
+    mgrsLabelFontSize: 12,
+    mgrsLabelFontSizeZoomed: 14,
+    mgrsLabelLetterSpacing: 0.5,
+  },
+  DARK: {
+    majorLineColor: 'rgba(120, 180, 220, 0.22)',
+    minorLineColor: 'rgba(120, 180, 220, 0.10)',
+    majorLineWidth: 1.4,
+    minorLineWidth: 1,
+    majorLineDash: [7, 6],
+    minorLineDash: [3, 7],
+    mgrsLabelFill: 'rgba(120, 180, 220, 0.24)',
+    mgrsLabelStroke: 'rgba(0, 0, 0, 0.30)',
+    mgrsLabelFontSize: 12,
+    mgrsLabelFontSizeZoomed: 14,
+    mgrsLabelLetterSpacing: 0.5,
+  },
+};
+
+const UTM_WGS84_A = 6378137.0;
+const UTM_WGS84_F = 1 / 298.257223563;
+const UTM_WGS84_E2 = UTM_WGS84_F * (2 - UTM_WGS84_F);
+const UTM_WGS84_E_PRIME_SQ = UTM_WGS84_E2 / (1 - UTM_WGS84_E2);
+const UTM_SCALE_FACTOR = 0.9996;
+const UTM_FALSE_EASTING = 500000.0;
+const UTM_NORTHERN_FALSE_NORTHING = 0.0;
+const UTM_EPSILON = 1e-9;
+
+const toRadians = (degree: number) => (degree * Math.PI) / 180;
+const toDegrees = (radian: number) => (radian * 180) / Math.PI;
+
+const getUtmZoneByLongitude = (lon: number): 51 | 52 => (lon < 126 ? 51 : 52);
+const getStableUtmZoneByLongitude = (lon: number, previousZone?: 51 | 52): 51 | 52 => {
+  if (
+    previousZone &&
+    lon >= UTM_ZONE_HYSTERESIS_MIN_LON &&
+    lon <= UTM_ZONE_HYSTERESIS_MAX_LON
+  ) {
+    return previousZone;
+  }
+  return getUtmZoneByLongitude(lon);
+};
+const getUtmEpsgByZone = (zone: 51 | 52): 32651 | 32652 => (zone === 51 ? 32651 : 32652);
+const getCentralMeridianByZone = (zone: 51 | 52) => (zone === 51 ? 123 : 129);
+
+const toUtmCoordinates = (lat: number, lon: number, zone: 51 | 52) => {
+  const latClamped = clamp(lat, -80, 84);
+  const lonNormalized = normalizeLongitude(lon);
+  const latRad = toRadians(latClamped);
+  const lonRad = toRadians(lonNormalized);
+  const lonOriginRad = toRadians(getCentralMeridianByZone(zone));
+
+  const sinLat = Math.sin(latRad);
+  const cosLat = Math.cos(latRad);
+  const tanLat = Math.tan(latRad);
+
+  const n = UTM_WGS84_A / Math.sqrt(1 - UTM_WGS84_E2 * sinLat * sinLat);
+  const t = tanLat * tanLat;
+  const c = UTM_WGS84_E_PRIME_SQ * cosLat * cosLat;
+  const a = cosLat * (lonRad - lonOriginRad);
+
+  const m =
+    UTM_WGS84_A *
+    ((1 - UTM_WGS84_E2 / 4 - (3 * UTM_WGS84_E2 ** 2) / 64 - (5 * UTM_WGS84_E2 ** 3) / 256) * latRad -
+      ((3 * UTM_WGS84_E2) / 8 + (3 * UTM_WGS84_E2 ** 2) / 32 + (45 * UTM_WGS84_E2 ** 3) / 1024) *
+        Math.sin(2 * latRad) +
+      ((15 * UTM_WGS84_E2 ** 2) / 256 + (45 * UTM_WGS84_E2 ** 3) / 1024) * Math.sin(4 * latRad) -
+      ((35 * UTM_WGS84_E2 ** 3) / 3072) * Math.sin(6 * latRad));
+
+  const easting =
+    UTM_SCALE_FACTOR *
+      n *
+      (a +
+        ((1 - t + c) * a ** 3) / 6 +
+        ((5 - 18 * t + t ** 2 + 72 * c - 58 * UTM_WGS84_E_PRIME_SQ) * a ** 5) / 120) +
+    UTM_FALSE_EASTING;
+
+  const northing =
+    UTM_SCALE_FACTOR *
+      (m +
+        n *
+          tanLat *
+          (a ** 2 / 2 +
+            ((5 - t + 9 * c + 4 * c ** 2) * a ** 4) / 24 +
+            ((61 - 58 * t + t ** 2 + 600 * c - 330 * UTM_WGS84_E_PRIME_SQ) * a ** 6) / 720)) +
+    UTM_NORTHERN_FALSE_NORTHING;
+
+  return { easting, northing };
+};
+
+const toLatLonFromUtm = (easting: number, northing: number, zone: 51 | 52): GeoPoint => {
+  const x = easting - UTM_FALSE_EASTING;
+  const y = northing - UTM_NORTHERN_FALSE_NORTHING;
+  const lonOriginRad = toRadians(getCentralMeridianByZone(zone));
+
+  const m = y / UTM_SCALE_FACTOR;
+  const mu =
+    m /
+    (UTM_WGS84_A *
+      (1 - UTM_WGS84_E2 / 4 - (3 * UTM_WGS84_E2 ** 2) / 64 - (5 * UTM_WGS84_E2 ** 3) / 256));
+
+  const e1 = (1 - Math.sqrt(1 - UTM_WGS84_E2)) / (1 + Math.sqrt(1 - UTM_WGS84_E2));
+  const j1 = (3 * e1) / 2 - (27 * e1 ** 3) / 32;
+  const j2 = (21 * e1 ** 2) / 16 - (55 * e1 ** 4) / 32;
+  const j3 = (151 * e1 ** 3) / 96;
+  const j4 = (1097 * e1 ** 4) / 512;
+
+  const fp =
+    mu + j1 * Math.sin(2 * mu) + j2 * Math.sin(4 * mu) + j3 * Math.sin(6 * mu) + j4 * Math.sin(8 * mu);
+  const sinFp = Math.sin(fp);
+  const cosFp = Math.cos(fp);
+  const tanFp = Math.tan(fp);
+
+  const c1 = UTM_WGS84_E_PRIME_SQ * cosFp ** 2;
+  const t1 = tanFp ** 2;
+  const n1 = UTM_WGS84_A / Math.sqrt(1 - UTM_WGS84_E2 * sinFp ** 2);
+  const r1 = (UTM_WGS84_A * (1 - UTM_WGS84_E2)) / (1 - UTM_WGS84_E2 * sinFp ** 2) ** 1.5;
+  const d = x / (n1 * UTM_SCALE_FACTOR);
+
+  const lat =
+    fp -
+    ((n1 * tanFp) / r1) *
+      (d ** 2 / 2 -
+        ((5 + 3 * t1 + 10 * c1 - 4 * c1 ** 2 - 9 * UTM_WGS84_E_PRIME_SQ) * d ** 4) / 24 +
+        ((61 + 90 * t1 + 298 * c1 + 45 * t1 ** 2 - 252 * UTM_WGS84_E_PRIME_SQ - 3 * c1 ** 2) * d ** 6) /
+          720);
+
+  const lon =
+    lonOriginRad +
+    (d - ((1 + 2 * t1 + c1) * d ** 3) / 6 +
+      ((5 - 2 * c1 + 28 * t1 - 3 * c1 ** 2 + 8 * UTM_WGS84_E_PRIME_SQ + 24 * t1 ** 2) * d ** 5) /
+        120) /
+      Math.max(UTM_EPSILON, cosFp);
+
+  return {
+    lat: toDegrees(lat),
+    lon: normalizeLongitude(toDegrees(lon)),
+  };
+};
+
+const buildGridLinePointsByFixedEasting = (
+  zone: 51 | 52,
+  easting: number,
+  minNorthing: number,
+  maxNorthing: number
+) => {
+  const points: GeoPoint[] = [];
+  const span = Math.max(UTM_EPSILON, maxNorthing - minNorthing);
+  for (let i = 0; i <= UTM_GRID_LINE_SAMPLE_STEPS; i += 1) {
+    const ratio = i / UTM_GRID_LINE_SAMPLE_STEPS;
+    const northing = minNorthing + span * ratio;
+    points.push(toLatLonFromUtm(easting, northing, zone));
+  }
+  return points;
+};
+
+const buildGridLinePointsByFixedNorthing = (
+  zone: 51 | 52,
+  northing: number,
+  minEasting: number,
+  maxEasting: number
+) => {
+  const points: GeoPoint[] = [];
+  const span = Math.max(UTM_EPSILON, maxEasting - minEasting);
+  for (let i = 0; i <= UTM_GRID_LINE_SAMPLE_STEPS; i += 1) {
+    const ratio = i / UTM_GRID_LINE_SAMPLE_STEPS;
+    const easting = minEasting + span * ratio;
+    points.push(toLatLonFromUtm(easting, northing, zone));
+  }
+  return points;
+};
+
+const isLikelyFilesystemPath = (pathValue: string): boolean => {
+  const normalized = pathValue.trim();
+  if (!normalized) return false;
+  if (/^https?:\/\//i.test(normalized)) return false;
+  if (normalized === DEFAULT_OFFICIAL_DATA_BASE_PATH || normalized.startsWith(`${DEFAULT_OFFICIAL_DATA_BASE_PATH}/`)) {
+    return false;
+  }
+  if (/^[A-Za-z]:[\\/]/.test(normalized)) return true;
+  if (normalized.startsWith('/')) return true;
+  if (normalized.startsWith('./') || normalized.startsWith('../') || normalized.startsWith('~')) return true;
+  return normalized.includes('\\');
+};
 
 const KOREA_MAINLAND_BOUNDARY: GeoPoint[] = [
   { lat: 34.24, lon: 126.09 },
@@ -220,6 +492,226 @@ const getRadarScaleFromLatitude = (lat: number, zoom: number) => {
     (Math.cos(latitudeRadians) * 2 * Math.PI * EARTH_RADIUS_METERS) /
     (TILE_SIZE * 2 ** zoom);
   return METERS_PER_RADAR_UNIT / metersPerPixel;
+};
+
+const getViewportBoundsForGrid = (
+  viewCenter: GeoPoint,
+  zoom: number,
+  canvas: { width: number; height: number }
+): UtmGridViewportBounds => {
+  const worldViewCenter = projectLatLonToWorld(viewCenter.lat, viewCenter.lon, zoom);
+  const topLeft = unprojectWorldToLatLon(
+    worldViewCenter.x - canvas.width / 2,
+    worldViewCenter.y - canvas.height / 2,
+    zoom
+  );
+  const bottomRight = unprojectWorldToLatLon(
+    worldViewCenter.x + canvas.width / 2,
+    worldViewCenter.y + canvas.height / 2,
+    zoom
+  );
+
+  const minLat = clamp(
+    Math.min(topLeft.lat, bottomRight.lat),
+    KOREA_BOUNDS.minLat,
+    KOREA_BOUNDS.maxLat
+  );
+  const maxLat = clamp(
+    Math.max(topLeft.lat, bottomRight.lat),
+    KOREA_BOUNDS.minLat,
+    KOREA_BOUNDS.maxLat
+  );
+  const minLon = clamp(
+    Math.min(topLeft.lon, bottomRight.lon),
+    KOREA_BOUNDS.minLon,
+    KOREA_BOUNDS.maxLon
+  );
+  const maxLon = clamp(
+    Math.max(topLeft.lon, bottomRight.lon),
+    KOREA_BOUNDS.minLon,
+    KOREA_BOUNDS.maxLon
+  );
+
+  return { minLat, maxLat, minLon, maxLon };
+};
+
+const getUtmBoundsFromViewport = (
+  zone: 51 | 52,
+  bounds: UtmGridViewportBounds,
+  paddingMeters = 0
+) => {
+  const samplePoints: GeoPoint[] = [
+    { lat: bounds.minLat, lon: bounds.minLon },
+    { lat: bounds.minLat, lon: bounds.maxLon },
+    { lat: bounds.maxLat, lon: bounds.minLon },
+    { lat: bounds.maxLat, lon: bounds.maxLon },
+    { lat: bounds.minLat, lon: (bounds.minLon + bounds.maxLon) / 2 },
+    { lat: bounds.maxLat, lon: (bounds.minLon + bounds.maxLon) / 2 },
+    { lat: (bounds.minLat + bounds.maxLat) / 2, lon: bounds.minLon },
+    { lat: (bounds.minLat + bounds.maxLat) / 2, lon: bounds.maxLon },
+    { lat: (bounds.minLat + bounds.maxLat) / 2, lon: (bounds.minLon + bounds.maxLon) / 2 },
+  ];
+  const utmSamples = samplePoints.map((point) => toUtmCoordinates(point.lat, point.lon, zone));
+  return {
+    minEasting: Math.min(...utmSamples.map((point) => point.easting)) - paddingMeters,
+    maxEasting: Math.max(...utmSamples.map((point) => point.easting)) + paddingMeters,
+    minNorthing: Math.min(...utmSamples.map((point) => point.northing)) - paddingMeters,
+    maxNorthing: Math.max(...utmSamples.map((point) => point.northing)) + paddingMeters,
+  };
+};
+
+const createMgrs100kmLabels = (
+  zone: 51 | 52,
+  bounds: UtmGridViewportBounds,
+  zoom: number
+): Mgrs100kmLabel[] => {
+  if (zoom < 8) return [];
+
+  const { minEasting, maxEasting, minNorthing, maxNorthing } = getUtmBoundsFromViewport(zone, bounds, 0);
+  const e0 = Math.floor(minEasting / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
+  const e1 = Math.ceil(maxEasting / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
+  const n0 = Math.floor(minNorthing / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
+  const n1 = Math.ceil(maxNorthing / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
+  const zoomBucket = zoom >= 12 ? 12 : 8;
+  const cacheKey = `${zone}:${zoomBucket}:${e0}:${e1}:${n0}:${n1}`;
+  const cached = utmMgrsLabelCache.get(cacheKey);
+  if (cached) return cached;
+
+  const labels: Mgrs100kmLabel[] = [];
+  for (let easting = e0; easting < e1; easting += UTM_GRID_MGRS_STEP_METERS) {
+    for (let northing = n0; northing < n1; northing += UTM_GRID_MGRS_STEP_METERS) {
+      const centerEasting = easting + UTM_GRID_MGRS_STEP_METERS / 2;
+      const centerNorthing = northing + UTM_GRID_MGRS_STEP_METERS / 2;
+      const centerPoint = toLatLonFromUtm(centerEasting, centerNorthing, zone);
+      const mgrsString = encodeMgrsFromLatLon(
+        centerPoint.lat,
+        centerPoint.lon,
+        (lat, lon, zoneNumber) => toUtmCoordinates(lat, lon, zoneNumber as 51 | 52),
+        zone,
+        0
+      );
+      const label = extract100kIdFromMgrs(mgrsString);
+      if (!label) continue;
+
+      labels.push({
+        id: `${zone}:${easting}:${northing}:${label}`,
+        label,
+        point: centerPoint,
+      });
+    }
+  }
+
+  if (utmMgrsLabelCache.size >= UTM_GRID_MGRS_CACHE_MAX) {
+    const oldest = utmMgrsLabelCache.keys().next().value;
+    if (oldest) {
+      utmMgrsLabelCache.delete(oldest);
+    }
+  }
+  utmMgrsLabelCache.set(cacheKey, labels);
+  return labels;
+};
+
+const createEmptyUtmGridData = (zone: 51 | 52, zoom: number): UtmGridData => ({
+  zone,
+  epsg: getUtmEpsgByZone(zone),
+  zoom,
+  majorLines: [],
+  minorLines: [],
+  mgrs100kmLabels: [],
+  viewportSignature: `${UTM_GRID_LAYER_SIGNATURE}:${zone}:${zoom}:none`,
+});
+
+const createUtmGridLines = (
+  zone: 51 | 52,
+  bounds: UtmGridViewportBounds,
+  spacingMeters: UtmGridSpacing
+): UtmGridLine[] => {
+  const { minEasting, maxEasting, minNorthing, maxNorthing } = getUtmBoundsFromViewport(
+    zone,
+    bounds,
+    spacingMeters
+  );
+
+  const eastingStart = Math.floor(minEasting / spacingMeters) * spacingMeters;
+  const eastingEnd = Math.ceil(maxEasting / spacingMeters) * spacingMeters;
+  const northingStart = Math.floor(minNorthing / spacingMeters) * spacingMeters;
+  const northingEnd = Math.ceil(maxNorthing / spacingMeters) * spacingMeters;
+
+  const eastingCount = Math.floor((eastingEnd - eastingStart) / spacingMeters) + 1;
+  const northingCount = Math.floor((northingEnd - northingStart) / spacingMeters) + 1;
+  const totalLineCount = eastingCount + northingCount;
+  const maxLineCount =
+    spacingMeters === UTM_GRID_MINOR_STEP_METERS
+      ? UTM_GRID_MAX_MINOR_LINE_COUNT
+      : UTM_GRID_MAX_MAJOR_LINE_COUNT;
+  if (totalLineCount > maxLineCount) {
+    return [];
+  }
+
+  const lines: UtmGridLine[] = [];
+  for (let easting = eastingStart; easting <= eastingEnd + UTM_EPSILON; easting += spacingMeters) {
+    const points = buildGridLinePointsByFixedEasting(zone, easting, northingStart, northingEnd);
+    if (points.length >= 2) {
+      lines.push({ points, spacingMeters });
+    }
+  }
+
+  for (let northing = northingStart; northing <= northingEnd + UTM_EPSILON; northing += spacingMeters) {
+    const points = buildGridLinePointsByFixedNorthing(zone, northing, eastingStart, eastingEnd);
+    if (points.length >= 2) {
+      lines.push({ points, spacingMeters });
+    }
+  }
+
+  return lines;
+};
+
+const buildUtmGridDataForViewport = (
+  center: GeoPoint,
+  zoom: number,
+  canvas: { width: number; height: number },
+  previousZone: 51 | 52,
+  showUtmGrid: boolean,
+  showMgrsLabels: boolean
+): UtmGridData => {
+  const zone = getStableUtmZoneByLongitude(center.lon, previousZone);
+  const shouldRenderLines = showUtmGrid && zoom >= 7;
+  const shouldRenderMgrsLabels = showMgrsLabels && zoom >= 8;
+  if (!shouldRenderLines && !shouldRenderMgrsLabels) {
+    return createEmptyUtmGridData(zone, zoom);
+  }
+
+  const bounds = getViewportBoundsForGrid(center, zoom, canvas);
+  const majorLines = shouldRenderLines
+    ? createUtmGridLines(zone, bounds, UTM_GRID_MAJOR_STEP_METERS)
+    : [];
+  const shouldRenderMinor = shouldRenderLines && zoom >= 11;
+  const minorLines = shouldRenderMinor ? createUtmGridLines(zone, bounds, UTM_GRID_MINOR_STEP_METERS) : [];
+  const mgrs100kmLabels = shouldRenderMgrsLabels ? createMgrs100kmLabels(zone, bounds, zoom) : [];
+
+  return {
+    zone,
+    epsg: getUtmEpsgByZone(zone),
+    zoom,
+    majorLines,
+    minorLines,
+    mgrs100kmLabels,
+    viewportSignature: [
+      UTM_GRID_LAYER_SIGNATURE,
+      zone,
+      getUtmEpsgByZone(zone),
+      zoom,
+      bounds.minLat.toFixed(4),
+      bounds.maxLat.toFixed(4),
+      bounds.minLon.toFixed(4),
+      bounds.maxLon.toFixed(4),
+      majorLines.length,
+      minorLines.length,
+      mgrs100kmLabels.length,
+      mgrs100kmLabels[0]?.id ?? 'none',
+      mgrs100kmLabels[mgrs100kmLabels.length - 1]?.id ?? 'none',
+    ].join(':'),
+  };
 };
 
 const toRecord = (value: unknown): Record<string, unknown> => {
@@ -537,16 +1029,20 @@ export function LidarSpatialView({
   selectedObjectId,
   onSelectObject,
   mapCenter,
-  onMapCenterChange,
+  detectionMode,
   mapTheme,
   mapLabelLevel,
+  showUtmGrid,
+  showMgrsLabels,
   mapDataPath,
   mapDataLoadNonce,
 }: LidarSpatialViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const tileCacheRef = useRef<Map<string, TileState>>(new Map());
-  const centerRef = useRef<GeoPoint>(mapCenter);
+  const staticLayerCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const staticLayerKeyRef = useRef('');
+  const viewCenterRef = useRef<GeoPoint>(mapCenter);
   const dragRef = useRef<DragState>({
     dragging: false,
     moved: false,
@@ -556,6 +1052,7 @@ export function LidarSpatialView({
   const [fontsReady, setFontsReady] = useState(false);
   const [tileVersion, setTileVersion] = useState(0);
   const [mapZoom, setMapZoom] = useState(DEFAULT_MAP_ZOOM);
+  const [mapViewCenter, setMapViewCenter] = useState<GeoPoint>(mapCenter);
   const [isDragging, setIsDragging] = useState(false);
   const [hoveredObjectId, setHoveredObjectId] = useState<string | null>(null);
   const [officialBoundaryLines, setOfficialBoundaryLines] = useState<GeoPolyline[]>([]);
@@ -567,9 +1064,14 @@ export function LidarSpatialView({
   const [officialSourceLabel, setOfficialSourceLabel] = useState('Fallback');
   const [officialDataLoaded, setOfficialDataLoaded] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 700, height: 820 });
+  const [utmGridData, setUtmGridData] = useState<UtmGridData>(() =>
+    createEmptyUtmGridData(getUtmZoneByLongitude(mapCenter.lon), DEFAULT_MAP_ZOOM)
+  );
 
   useEffect(() => {
-    centerRef.current = mapCenter;
+    // Settings-provided coordinate is the fixed radar site center.
+    viewCenterRef.current = mapCenter;
+    setMapViewCenter(mapCenter);
   }, [mapCenter]);
 
   useEffect(() => {
@@ -642,6 +1144,7 @@ export function LidarSpatialView({
 
   useEffect(() => {
     tileCacheRef.current.clear();
+    staticLayerKeyRef.current = '';
     setTileVersion((prev) => prev + 1);
   }, [mapTheme]);
 
@@ -649,8 +1152,29 @@ export function LidarSpatialView({
     let cancelled = false;
     const normalizedBasePath = (mapDataPath || DEFAULT_OFFICIAL_DATA_BASE_PATH).trim().replace(/\/+$/, '') || DEFAULT_OFFICIAL_DATA_BASE_PATH;
     const cacheBuster = Date.now();
+    const runtime = (window as Window & { radarRuntime?: RadarRuntimeBridge }).radarRuntime;
+    const canReadLocalDirectory =
+      isLikelyFilesystemPath(normalizedBasePath) &&
+      typeof runtime?.readGeoJsonFromDirectory === 'function';
 
     const loadFirstGeoJson = async (fileNames: string[]) => {
+      if (canReadLocalDirectory && runtime?.readGeoJsonFromDirectory) {
+        try {
+          const localResult = await runtime.readGeoJsonFromDirectory({
+            basePath: normalizedBasePath,
+            fileNames,
+          });
+          if (localResult?.ok && localResult.data) {
+            return {
+              path: localResult.path || `${normalizedBasePath}/${fileNames[0]}`,
+              data: localResult.data,
+            };
+          }
+        } catch {
+          // Fallback to fetch.
+        }
+      }
+
       for (const fileName of fileNames) {
         const path = `${normalizedBasePath}/${fileName}`;
         try {
@@ -722,6 +1246,60 @@ export function LidarSpatialView({
     };
   }, [mapDataPath, mapDataLoadNonce]);
 
+  useEffect(() => {
+    const zone = getStableUtmZoneByLongitude(mapViewCenter.lon, utmGridData.zone);
+    if (!showUtmGrid && !showMgrsLabels) {
+      const emptyData = createEmptyUtmGridData(zone, mapZoom);
+      setUtmGridData((prev) =>
+        prev.viewportSignature === emptyData.viewportSignature ? prev : emptyData
+      );
+      return;
+    }
+    // Keep drag interaction smooth: rebuild the meter grid after movement settles.
+    if (isDragging) {
+      return;
+    }
+
+    if (typeof window === 'undefined') return;
+
+    let cancelled = false;
+    let rafId = 0;
+    const timeoutId = window.setTimeout(() => {
+      rafId = window.requestAnimationFrame(() => {
+        if (cancelled) return;
+        const nextGrid = buildUtmGridDataForViewport(
+          mapViewCenter,
+          mapZoom,
+          canvasSize,
+          utmGridData.zone,
+          showUtmGrid,
+          showMgrsLabels
+        );
+        setUtmGridData((prev) =>
+          prev.viewportSignature === nextGrid.viewportSignature ? prev : nextGrid
+        );
+      });
+    }, UTM_GRID_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, [
+    showUtmGrid,
+    showMgrsLabels,
+    mapZoom,
+    isDragging,
+    utmGridData.zone,
+    mapViewCenter.lat,
+    mapViewCenter.lon,
+    canvasSize.width,
+    canvasSize.height,
+  ]);
+
   const requestTile = (theme: 'DARK' | 'LIGHT', z: number, x: number, y: number): TileState => {
     const key = `${theme}:${z}/${x}/${y}`;
     const cached = tileCacheRef.current.get(key);
@@ -774,16 +1352,21 @@ export function LidarSpatialView({
     const koreanCanvasFont =
       '"ARGUS Korean", "Noto Sans CJK KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
     const isDarkTheme = mapTheme === 'DARK';
-    const showDistrictLabels = mapLabelLevel === 'DISTRICT' || mapLabelLevel === 'EMD';
-    const showEmdLabels = mapLabelLevel === 'EMD';
+    const isSpeedPriorityMode = detectionMode === 'SPEED';
+    const lowDetailMode = isSpeedPriorityMode && isDragging;
+    const showDistrictLabels =
+      !lowDetailMode && (mapLabelLevel === 'DISTRICT' || mapLabelLevel === 'EMD');
+    const showEmdLabels = !lowDetailMode && mapLabelLevel === 'EMD';
     const tileFilter = isDarkTheme
       ? 'grayscale(100%) brightness(28%) contrast(125%)'
       : 'grayscale(45%) brightness(92%) contrast(108%)';
     const tileAlpha = isDarkTheme ? DARK_TILE_ALPHA : LIGHT_TILE_ALPHA;
     const overlayColor = isDarkTheme ? TACTICAL_DARK_OVERLAY : TACTICAL_LIGHT_OVERLAY;
     const baseFill = isDarkTheme ? '#0b0f14' : '#dfe8ee';
-    const ringColor = isDarkTheme ? 'rgba(74, 222, 128, 0.28)' : 'rgba(21, 94, 45, 0.52)';
-    const ringLabelColor = isDarkTheme ? 'rgba(134, 239, 172, 0.78)' : 'rgba(20, 83, 45, 0.96)';
+    const ringColor = isDarkTheme ? 'rgba(74, 255, 128, 0.52)' : 'rgba(21, 94, 45, 0.52)';
+    const ringLabelColor = isDarkTheme ? 'rgba(187, 255, 204, 0.98)' : 'rgba(20, 83, 45, 0.96)';
+    const utmGridStyle = isDarkTheme ? UTM_GRID_THEME_STYLE.DARK : UTM_GRID_THEME_STYLE.LIGHT;
+    const minorGridLineWidth = mapZoom >= 15 ? 1.2 : utmGridStyle.minorLineWidth;
     const airspaceStroke = isDarkTheme ? '#a855f7' : 'rgba(20, 20, 20, 0.64)';
     const seaStroke = isDarkTheme ? '#22d3ee' : 'rgba(18, 18, 18, 0.72)';
     const boundaryStroke = isDarkTheme ? '#7dd3fc' : 'rgba(8, 8, 8, 0.82)';
@@ -797,7 +1380,8 @@ export function LidarSpatialView({
     const provinceFontSize = 17;
     const districtFontSize = 12;
     const emdFontSize = 10;
-    const ringLabelFontSize = 12;
+    const ringLabelFontSize = 24;
+    const ringLabelYOffset = Math.max(14, ringLabelFontSize + 2);
     const provinceLabelDistanceX = 46;
     const provinceLabelDistanceY = 18;
     const districtLabelDistanceX = 34;
@@ -805,15 +1389,65 @@ export function LidarSpatialView({
     const emdLabelDistanceX = 30;
     const emdLabelDistanceY = 12;
 
-    // Draw map tiles (OpenStreetMap) with loading fallback text.
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = baseFill;
-    ctx.fillRect(0, 0, width, height);
-
-    const worldCenter = projectLatLonToWorld(mapCenter.lat, mapCenter.lon, mapZoom);
-    const topLeftWorldX = worldCenter.x - width / 2;
-    const topLeftWorldY = worldCenter.y - height / 2;
+    const worldViewCenter = projectLatLonToWorld(mapViewCenter.lat, mapViewCenter.lon, mapZoom);
+    const worldRadarCenter = projectLatLonToWorld(mapCenter.lat, mapCenter.lon, mapZoom);
+    const radarCenterCanvas = {
+      x: centerX + (worldRadarCenter.x - worldViewCenter.x),
+      y: centerY + (worldRadarCenter.y - worldViewCenter.y),
+    };
+    const topLeftWorldX = worldViewCenter.x - width / 2;
+    const topLeftWorldY = worldViewCenter.y - height / 2;
     const worldTileCount = 2 ** mapZoom;
+    const boundarySignature = `${officialBoundaryLines.length}:${
+      officialBoundaryLines[0]?.points.length ?? 0
+    }:${officialBoundaryLines[officialBoundaryLines.length - 1]?.points.length ?? 0}`;
+    const seaSignature = `${officialSeaLines.length}:${
+      officialSeaLines[0]?.points.length ?? 0
+    }:${officialSeaLines[officialSeaLines.length - 1]?.points.length ?? 0}`;
+    const airspaceSignature = `${officialAirspaceLines.length}:${
+      officialAirspaceLines[0]?.points.length ?? 0
+    }:${officialAirspaceLines[officialAirspaceLines.length - 1]?.points.length ?? 0}`;
+    const labelSignature = `${officialProvinceLabels.length}:${officialDistrictLabels.length}:${officialEmdLabels.length}`;
+    const staticLayerKey = [
+      width,
+      height,
+      mapTheme,
+      mapLabelLevel,
+      mapZoom,
+      mapCenter.lat.toFixed(6),
+      mapCenter.lon.toFixed(6),
+      mapViewCenter.lat.toFixed(6),
+      mapViewCenter.lon.toFixed(6),
+      tileVersion,
+      fontsReady ? 1 : 0,
+      officialDataLoaded ? 1 : 0,
+      officialSourceLabel,
+      boundarySignature,
+      seaSignature,
+      airspaceSignature,
+      labelSignature,
+      showUtmGrid || showMgrsLabels
+        ? utmGridData.viewportSignature
+        : `${UTM_GRID_LAYER_SIGNATURE}:off`,
+      isSpeedPriorityMode ? 1 : 0,
+      lowDetailMode ? 1 : 0,
+    ].join('|');
+
+    if (!staticLayerCanvasRef.current) {
+      staticLayerCanvasRef.current = document.createElement('canvas');
+    }
+
+    const staticCanvas = staticLayerCanvasRef.current;
+    if (!staticCanvas) return;
+    if (staticCanvas.width !== width || staticCanvas.height !== height) {
+      staticCanvas.width = width;
+      staticCanvas.height = height;
+      staticLayerKeyRef.current = '';
+    }
+
+    const staticCtx = staticCanvas.getContext('2d');
+    const shouldRenderStaticLayer =
+      !isSpeedPriorityMode || !staticCtx || staticLayerKeyRef.current !== staticLayerKey;
 
     let hasVisibleTile = false;
     const startTileX = Math.floor(topLeftWorldX / TILE_SIZE);
@@ -821,54 +1455,63 @@ export function LidarSpatialView({
     const startTileY = Math.floor(topLeftWorldY / TILE_SIZE);
     const endTileY = Math.floor((topLeftWorldY + height) / TILE_SIZE);
 
-    for (let tileY = startTileY - 1; tileY <= endTileY + 1; tileY += 1) {
-      if (tileY < 0 || tileY >= worldTileCount) continue;
-
-      for (let tileX = startTileX - 1; tileX <= endTileX + 1; tileX += 1) {
-        const wrappedTileX = ((tileX % worldTileCount) + worldTileCount) % worldTileCount;
-        const tile = requestTile(mapTheme, mapZoom, wrappedTileX, tileY);
-        if (!tile.loaded || tile.failed) continue;
-
-        const drawX = tileX * TILE_SIZE - topLeftWorldX;
-        const drawY = tileY * TILE_SIZE - topLeftWorldY;
-        ctx.save();
-        ctx.filter = tileFilter;
-        ctx.globalAlpha = tileAlpha;
-        ctx.drawImage(tile.image, drawX, drawY, TILE_SIZE, TILE_SIZE);
-        ctx.restore();
-        hasVisibleTile = true;
-      }
-    }
-
-    if (!hasVisibleTile) {
-      ctx.fillStyle = isDarkTheme ? '#05080d' : '#dfe8ee';
-      ctx.fillRect(0, 0, width, height);
-    }
-
-    ctx.fillStyle = hasVisibleTile
-      ? overlayColor
-      : isDarkTheme
-        ? 'rgba(6, 12, 18, 0.72)'
-        : 'rgba(8, 18, 30, 0.1)';
-    ctx.fillRect(0, 0, width, height);
-
-    if (!hasVisibleTile) {
-      ctx.save();
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.font = `700 24px ${monoCanvasFont}`;
-      ctx.fillStyle = isDarkTheme ? 'rgba(125, 211, 252, 0.9)' : 'rgba(15, 23, 42, 0.82)';
-      ctx.fillText('Map Loading', centerX, centerY);
-      ctx.restore();
-    }
-
     const toCanvasPointFromGeo = (lat: number, lon: number) => {
       const worldPoint = projectLatLonToWorld(lat, lon, mapZoom);
       return {
-        x: centerX + (worldPoint.x - worldCenter.x),
-        y: centerY + (worldPoint.y - worldCenter.y),
+        x: centerX + (worldPoint.x - worldViewCenter.x),
+        y: centerY + (worldPoint.y - worldViewCenter.y),
       };
     };
+
+    if (!shouldRenderStaticLayer) {
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(staticCanvas, 0, 0, width, height);
+    } else {
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = baseFill;
+      ctx.fillRect(0, 0, width, height);
+
+      for (let tileY = startTileY - 1; tileY <= endTileY + 1; tileY += 1) {
+        if (tileY < 0 || tileY >= worldTileCount) continue;
+
+        for (let tileX = startTileX - 1; tileX <= endTileX + 1; tileX += 1) {
+          const wrappedTileX = ((tileX % worldTileCount) + worldTileCount) % worldTileCount;
+          const tile = requestTile(mapTheme, mapZoom, wrappedTileX, tileY);
+          if (!tile.loaded || tile.failed) continue;
+
+          const drawX = tileX * TILE_SIZE - topLeftWorldX;
+          const drawY = tileY * TILE_SIZE - topLeftWorldY;
+          ctx.save();
+          ctx.filter = tileFilter;
+          ctx.globalAlpha = tileAlpha;
+          ctx.drawImage(tile.image, drawX, drawY, TILE_SIZE, TILE_SIZE);
+          ctx.restore();
+          hasVisibleTile = true;
+        }
+      }
+
+      if (!hasVisibleTile) {
+        ctx.fillStyle = isDarkTheme ? '#05080d' : '#dfe8ee';
+        ctx.fillRect(0, 0, width, height);
+      }
+
+      ctx.fillStyle = hasVisibleTile
+        ? overlayColor
+        : isDarkTheme
+          ? 'rgba(6, 12, 18, 0.72)'
+          : 'rgba(8, 18, 30, 0.1)';
+      ctx.fillRect(0, 0, width, height);
+
+      if (!hasVisibleTile) {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `700 24px ${monoCanvasFont}`;
+        ctx.fillStyle = isDarkTheme ? 'rgba(125, 211, 252, 0.9)' : 'rgba(15, 23, 42, 0.82)';
+        ctx.fillText('Map Loading', centerX, centerY);
+        ctx.restore();
+      }
+    }
 
     const drawGeoPolyline = (
       points: GeoPoint[],
@@ -894,49 +1537,146 @@ export function LidarSpatialView({
       ctx.restore();
     };
 
-    // Draw range rings (normalized display for requested radar scale labels)
-    ctx.strokeStyle = ringColor;
-    ctx.lineWidth = 1.5;
-    const rangeRingsKm = [15, 10, 5, 3, 2, 1];
-    const maxRangeKm = MAX_RANGE_KM;
-    const maxRingRadiusPx = RADAR_UNITS_MAX * scale;
-    rangeRingsKm.forEach((rangeKm) => {
-      const radiusPx = (rangeKm / maxRangeKm) * maxRingRadiusPx;
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, radiusPx, 0, Math.PI * 2);
-      ctx.stroke();
+    if (shouldRenderStaticLayer) {
+      // Dynamic UTM meter grid (source: argus-utm-grid, layers: argus-utm-10km / argus-utm-1km).
+      // Draw first to keep it below tactical tracks/icons/radar markers.
+      if (showUtmGrid) {
+        const shouldDrawMinorGrid = mapZoom >= 11 && utmGridData.minorLines.length > 0;
+        if (shouldDrawMinorGrid) {
+          utmGridData.minorLines.forEach((line) => {
+            drawGeoPolyline(
+              line.points,
+              utmGridStyle.minorLineColor,
+              minorGridLineWidth,
+              utmGridStyle.minorLineDash,
+              1
+            );
+          });
+        }
 
-      // Label
-      ctx.fillStyle = ringLabelColor;
-      ctx.font = `400 ${ringLabelFontSize}px ${monoCanvasFont}`;
-      ctx.fillText(`${rangeKm}km`, centerX + 6, centerY - radiusPx + 14);
-    });
+        utmGridData.majorLines.forEach((line) => {
+          drawGeoPolyline(
+            line.points,
+            utmGridStyle.majorLineColor,
+            utmGridStyle.majorLineWidth,
+            utmGridStyle.majorLineDash,
+            1
+          );
+        });
+      }
 
-    // Tactical boundary overlays (official local GeoJSON preferred)
-    const boundaryLineSet =
-      officialBoundaryLines.length > 0
-        ? officialBoundaryLines
-        : [
-            { points: KOREA_MAINLAND_BOUNDARY },
-            { points: JEJU_BOUNDARY },
-            { points: ULLEUNG_BOUNDARY },
-          ];
-    const seaLineSet =
-      officialSeaLines.length > 0 ? officialSeaLines : [{ points: TERRITORIAL_SEA_LINE }];
-    const airspaceLineSet =
-      officialAirspaceLines.length > 0 ? officialAirspaceLines : [{ points: AIRSPACE_LINE }];
+      if (showMgrsLabels && mapZoom >= 8 && utmGridData.mgrs100kmLabels.length > 0) {
+        const placedMgrsLabels: Array<{ x: number; y: number }> = [];
+        const mgrsFontSize =
+          mapZoom >= 12 ? utmGridStyle.mgrsLabelFontSizeZoomed : utmGridStyle.mgrsLabelFontSize;
+        const drawSpacedLabel = (
+          text: string,
+          x: number,
+          y: number,
+          spacing: number
+        ) => {
+          const chars = Array.from(text);
+          if (chars.length === 0) return;
+          const charWidths = chars.map((char) => ctx.measureText(char).width);
+          const totalWidth =
+            charWidths.reduce((sum, widthValue) => sum + widthValue, 0) +
+            spacing * Math.max(0, chars.length - 1);
+          let cursorX = x - totalWidth / 2;
 
-    airspaceLineSet.forEach((line) => drawGeoPolyline(line.points, airspaceStroke, 1.2, [8, 4], 0.5));
-    seaLineSet.forEach((line) => drawGeoPolyline(line.points, seaStroke, 1.4, [4, 3], 0.65));
-    boundaryLineSet.forEach((line) => drawGeoPolyline(line.points, boundaryStroke, 1.6, [], 0.84));
+          chars.forEach((char, index) => {
+            const charWidth = charWidths[index];
+            const charCenterX = cursorX + charWidth / 2;
+            ctx.strokeText(char, charCenterX, y);
+            ctx.fillText(char, charCenterX, y);
+            cursorX += charWidth + spacing;
+          });
+        };
 
-    ctx.fillStyle = territorialLabelColor;
-    ctx.font = `700 ${Math.max(provinceFontSize, districtFontSize)}px ${koreanCanvasFont}`;
-    const territorialLabel = toCanvasPointFromGeo(33.2, 125.0);
-    ctx.fillText('영해 경계', territorialLabel.x, territorialLabel.y);
-    ctx.fillStyle = airspaceLabelColor;
-    const airspaceLabel = toCanvasPointFromGeo(39.1, 123.6);
-    ctx.fillText('영공 경계', airspaceLabel.x, airspaceLabel.y);
+        ctx.save();
+        ctx.font = `600 ${mgrsFontSize}px ${monoCanvasFont}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = utmGridStyle.mgrsLabelStroke;
+        ctx.fillStyle = utmGridStyle.mgrsLabelFill;
+
+        utmGridData.mgrs100kmLabels.forEach((label) => {
+          const canvasPoint = toCanvasPointFromGeo(label.point.lat, label.point.lon);
+          if (
+            canvasPoint.x < 10 ||
+            canvasPoint.x > width - 10 ||
+            canvasPoint.y < 10 ||
+            canvasPoint.y > height - 10
+          ) {
+            return;
+          }
+
+          const hasOverlap = placedMgrsLabels.some(
+            (placed) =>
+              Math.hypot(placed.x - canvasPoint.x, placed.y - canvasPoint.y) <
+              UTM_GRID_MGRS_MIN_LABEL_DISTANCE_PX
+          );
+          if (hasOverlap) return;
+
+          placedMgrsLabels.push(canvasPoint);
+          drawSpacedLabel(
+            label.label,
+            canvasPoint.x,
+            canvasPoint.y,
+            utmGridStyle.mgrsLabelLetterSpacing
+          );
+        });
+        ctx.restore();
+      }
+
+      // Draw range rings (normalized display for requested radar scale labels)
+      ctx.strokeStyle = ringColor;
+      ctx.lineWidth = 1.5;
+      const rangeRingsKm = [15, 10, 5, 3, 2, 1];
+      const maxRangeKm = MAX_RANGE_KM;
+      const maxRingRadiusPx = RADAR_UNITS_MAX * scale;
+      rangeRingsKm.forEach((rangeKm) => {
+        const radiusPx = (rangeKm / maxRangeKm) * maxRingRadiusPx;
+        ctx.beginPath();
+        ctx.arc(radarCenterCanvas.x, radarCenterCanvas.y, radiusPx, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Label
+        ctx.fillStyle = ringLabelColor;
+        ctx.font = `400 ${ringLabelFontSize}px ${monoCanvasFont}`;
+        ctx.fillText(
+          `${rangeKm}km`,
+          radarCenterCanvas.x + 6,
+          radarCenterCanvas.y - radiusPx + ringLabelYOffset
+        );
+      });
+
+      // Tactical boundary overlays (official local GeoJSON preferred)
+      const boundaryLineSet =
+        officialBoundaryLines.length > 0
+          ? officialBoundaryLines
+          : [
+              { points: KOREA_MAINLAND_BOUNDARY },
+              { points: JEJU_BOUNDARY },
+              { points: ULLEUNG_BOUNDARY },
+            ];
+      const seaLineSet =
+        officialSeaLines.length > 0 ? officialSeaLines : [{ points: TERRITORIAL_SEA_LINE }];
+      const airspaceLineSet =
+        officialAirspaceLines.length > 0 ? officialAirspaceLines : [{ points: AIRSPACE_LINE }];
+
+      airspaceLineSet.forEach((line) => drawGeoPolyline(line.points, airspaceStroke, 1.2, [8, 4], 0.5));
+      seaLineSet.forEach((line) => drawGeoPolyline(line.points, seaStroke, 1.4, [4, 3], 0.65));
+      boundaryLineSet.forEach((line) => drawGeoPolyline(line.points, boundaryStroke, 1.6, [], 0.84));
+
+      ctx.fillStyle = territorialLabelColor;
+      ctx.font = `700 ${Math.max(provinceFontSize, districtFontSize)}px ${koreanCanvasFont}`;
+      const territorialLabel = toCanvasPointFromGeo(33.2, 125.0);
+      ctx.fillText('영해 경계', territorialLabel.x, territorialLabel.y);
+      ctx.fillStyle = airspaceLabelColor;
+      const airspaceLabel = toCanvasPointFromGeo(39.1, 123.6);
+      ctx.fillText('영공 경계', airspaceLabel.x, airspaceLabel.y);
+    }
 
     const topLeft = unprojectWorldToLatLon(topLeftWorldX, topLeftWorldY, mapZoom);
     const bottomRight = unprojectWorldToLatLon(topLeftWorldX + width, topLeftWorldY + height, mapZoom);
@@ -1022,72 +1762,80 @@ export function LidarSpatialView({
       });
     };
 
-    drawLabelLayer(provinceLabels, {
-      enabled: true,
-      minZoom: 7,
-      baseDensity: 1,
-      fontSize: provinceFontSize,
-      overlapX: provinceLabelDistanceX,
-      overlapY: provinceLabelDistanceY,
-      cullOverlap: false,
-    });
-    drawLabelLayer(officialDistrictLabels, {
-      enabled: showDistrictLabels,
-      minZoom: 9,
-      baseDensity: 1,
-      fontSize: districtFontSize,
-      overlapX: districtLabelDistanceX,
-      overlapY: districtLabelDistanceY,
-      cullOverlap: true,
-    });
-    drawLabelLayer(officialEmdLabels, {
-      enabled: showEmdLabels,
-      minZoom: 11,
-      baseDensity: mapZoom >= 13 ? 1 : mapZoom === 12 ? 2 : mapZoom === 11 ? 3 : 5,
-      fontSize: emdFontSize,
-      overlapX: emdLabelDistanceX,
-      overlapY: emdLabelDistanceY,
-      cullOverlap: true,
-    });
+    if (shouldRenderStaticLayer) {
+      drawLabelLayer(provinceLabels, {
+        enabled: true,
+        minZoom: 7,
+        baseDensity: 1,
+        fontSize: provinceFontSize,
+        overlapX: provinceLabelDistanceX,
+        overlapY: provinceLabelDistanceY,
+        cullOverlap: false,
+      });
+      drawLabelLayer(officialDistrictLabels, {
+        enabled: showDistrictLabels,
+        minZoom: 9,
+        baseDensity: 1,
+        fontSize: districtFontSize,
+        overlapX: districtLabelDistanceX,
+        overlapY: districtLabelDistanceY,
+        cullOverlap: true,
+      });
+      drawLabelLayer(officialEmdLabels, {
+        enabled: showEmdLabels,
+        minZoom: 11,
+        baseDensity: mapZoom >= 13 ? 1 : mapZoom === 12 ? 2 : mapZoom === 11 ? 3 : 5,
+        fontSize: emdFontSize,
+        overlapX: emdLabelDistanceX,
+        overlapY: emdLabelDistanceY,
+        cullOverlap: true,
+      });
 
-    // Draw center crosshair (sensor position)
-    ctx.strokeStyle = 'rgba(6, 182, 212, 0.6)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(centerX - 10, centerY);
-    ctx.lineTo(centerX + 10, centerY);
-    ctx.moveTo(centerX, centerY - 10);
-    ctx.lineTo(centerX, centerY + 10);
-    ctx.stroke();
+      // Draw center crosshair (sensor position)
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.6)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(radarCenterCanvas.x - 10, radarCenterCanvas.y);
+      ctx.lineTo(radarCenterCanvas.x + 10, radarCenterCanvas.y);
+      ctx.moveTo(radarCenterCanvas.x, radarCenterCanvas.y - 10);
+      ctx.lineTo(radarCenterCanvas.x, radarCenterCanvas.y + 10);
+      ctx.stroke();
 
-    // Draw corner brackets at sensor
-    const bracketSize = 20;
-    ctx.strokeStyle = 'rgba(6, 182, 212, 0.5)';
-    ctx.lineWidth = 2;
-    // Top-left
-    ctx.beginPath();
-    ctx.moveTo(centerX - bracketSize, centerY - bracketSize + 5);
-    ctx.lineTo(centerX - bracketSize, centerY - bracketSize);
-    ctx.lineTo(centerX - bracketSize + 5, centerY - bracketSize);
-    ctx.stroke();
-    // Top-right
-    ctx.beginPath();
-    ctx.moveTo(centerX + bracketSize - 5, centerY - bracketSize);
-    ctx.lineTo(centerX + bracketSize, centerY - bracketSize);
-    ctx.lineTo(centerX + bracketSize, centerY - bracketSize + 5);
-    ctx.stroke();
-    // Bottom-left
-    ctx.beginPath();
-    ctx.moveTo(centerX - bracketSize, centerY + bracketSize - 5);
-    ctx.lineTo(centerX - bracketSize, centerY + bracketSize);
-    ctx.lineTo(centerX - bracketSize + 5, centerY + bracketSize);
-    ctx.stroke();
-    // Bottom-right
-    ctx.beginPath();
-    ctx.moveTo(centerX + bracketSize - 5, centerY + bracketSize);
-    ctx.lineTo(centerX + bracketSize, centerY + bracketSize);
-    ctx.lineTo(centerX + bracketSize, centerY + bracketSize - 5);
-    ctx.stroke();
+      // Draw corner brackets at sensor
+      const bracketSize = 20;
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.5)';
+      ctx.lineWidth = 2;
+      // Top-left
+      ctx.beginPath();
+      ctx.moveTo(radarCenterCanvas.x - bracketSize, radarCenterCanvas.y - bracketSize + 5);
+      ctx.lineTo(radarCenterCanvas.x - bracketSize, radarCenterCanvas.y - bracketSize);
+      ctx.lineTo(radarCenterCanvas.x - bracketSize + 5, radarCenterCanvas.y - bracketSize);
+      ctx.stroke();
+      // Top-right
+      ctx.beginPath();
+      ctx.moveTo(radarCenterCanvas.x + bracketSize - 5, radarCenterCanvas.y - bracketSize);
+      ctx.lineTo(radarCenterCanvas.x + bracketSize, radarCenterCanvas.y - bracketSize);
+      ctx.lineTo(radarCenterCanvas.x + bracketSize, radarCenterCanvas.y - bracketSize + 5);
+      ctx.stroke();
+      // Bottom-left
+      ctx.beginPath();
+      ctx.moveTo(radarCenterCanvas.x - bracketSize, radarCenterCanvas.y + bracketSize - 5);
+      ctx.lineTo(radarCenterCanvas.x - bracketSize, radarCenterCanvas.y + bracketSize);
+      ctx.lineTo(radarCenterCanvas.x - bracketSize + 5, radarCenterCanvas.y + bracketSize);
+      ctx.stroke();
+      // Bottom-right
+      ctx.beginPath();
+      ctx.moveTo(radarCenterCanvas.x + bracketSize - 5, radarCenterCanvas.y + bracketSize);
+      ctx.lineTo(radarCenterCanvas.x + bracketSize, radarCenterCanvas.y + bracketSize);
+      ctx.lineTo(radarCenterCanvas.x + bracketSize, radarCenterCanvas.y + bracketSize - 5);
+      ctx.stroke();
+
+      if (isSpeedPriorityMode && staticCtx) {
+        staticCtx.clearRect(0, 0, width, height);
+        staticCtx.drawImage(canvas, 0, 0, width, height);
+        staticLayerKeyRef.current = staticLayerKey;
+      }
+    }
 
     // Draw objects (ID by default, full details on hover/selection)
     const focusedObjectId = selectedObjectId ?? hoveredObjectId;
@@ -1109,7 +1857,10 @@ export function LidarSpatialView({
     objectsByPriority.forEach((obj) => {
       const currentPoint = obj.geoPosition
         ? toCanvasPointFromGeo(obj.geoPosition.lat, obj.geoPosition.lon)
-        : { x: centerX + obj.position.x * scale, y: centerY - obj.position.y * scale };
+        : {
+            x: radarCenterCanvas.x + obj.position.x * scale,
+            y: radarCenterCanvas.y - obj.position.y * scale,
+          };
       const x = currentPoint.x;
       const y = currentPoint.y;
 
@@ -1145,9 +1896,12 @@ export function LidarSpatialView({
         ctx.globalAlpha = focusAlpha * (isCandidate ? 0.18 : 0.34);
         ctx.beginPath();
         const firstPoint = obj.trackHistory[0];
-        ctx.moveTo(centerX + firstPoint.x * scale, centerY - firstPoint.y * scale);
+        ctx.moveTo(
+          radarCenterCanvas.x + firstPoint.x * scale,
+          radarCenterCanvas.y - firstPoint.y * scale
+        );
         obj.trackHistory.forEach((point) => {
-          ctx.lineTo(centerX + point.x * scale, centerY - point.y * scale);
+          ctx.lineTo(radarCenterCanvas.x + point.x * scale, radarCenterCanvas.y - point.y * scale);
         });
         ctx.stroke();
         ctx.restore();
@@ -1177,7 +1931,7 @@ export function LidarSpatialView({
         ctx.beginPath();
         ctx.moveTo(x, y);
         obj.predictedPath.forEach((point) => {
-          ctx.lineTo(centerX + point.x * scale, centerY - point.y * scale);
+          ctx.lineTo(radarCenterCanvas.x + point.x * scale, radarCenterCanvas.y - point.y * scale);
         });
         ctx.stroke();
         ctx.restore();
@@ -1338,16 +2092,25 @@ export function LidarSpatialView({
       }
       ctx.restore();
     });
+
   }, [
     objects,
     selectedObjectId,
     hoveredObjectId,
+    isDragging,
     fontsReady,
     mapCenter,
+    mapViewCenter,
     mapZoom,
+    detectionMode,
     mapTheme,
     mapLabelLevel,
+    showUtmGrid,
+    showMgrsLabels,
+    utmGridData.viewportSignature,
     tileVersion,
+    officialDataLoaded,
+    officialSourceLabel,
     officialBoundaryLines,
     officialSeaLines,
     officialAirspaceLines,
@@ -1366,12 +2129,17 @@ export function LidarSpatialView({
     const centerX = width / 2;
     const centerY = height / 2;
     const scale = getRadarScaleFromLatitude(mapCenter.lat, mapZoom);
-    const worldCenter = projectLatLonToWorld(mapCenter.lat, mapCenter.lon, mapZoom);
+    const worldViewCenter = projectLatLonToWorld(mapViewCenter.lat, mapViewCenter.lon, mapZoom);
+    const worldRadarCenter = projectLatLonToWorld(mapCenter.lat, mapCenter.lon, mapZoom);
+    const radarCenterCanvas = {
+      x: centerX + (worldRadarCenter.x - worldViewCenter.x),
+      y: centerY + (worldRadarCenter.y - worldViewCenter.y),
+    };
     const toCanvasPointFromGeo = (lat: number, lon: number) => {
       const worldPoint = projectLatLonToWorld(lat, lon, mapZoom);
       return {
-        x: centerX + (worldPoint.x - worldCenter.x),
-        y: centerY + (worldPoint.y - worldCenter.y),
+        x: centerX + (worldPoint.x - worldViewCenter.x),
+        y: centerY + (worldPoint.y - worldViewCenter.y),
       };
     };
 
@@ -1381,7 +2149,10 @@ export function LidarSpatialView({
     objects.forEach((obj) => {
       const canvasPoint = obj.geoPosition
         ? toCanvasPointFromGeo(obj.geoPosition.lat, obj.geoPosition.lon)
-        : { x: centerX + obj.position.x * scale, y: centerY - obj.position.y * scale };
+        : {
+            x: radarCenterCanvas.x + obj.position.x * scale,
+            y: radarCenterCanvas.y - obj.position.y * scale,
+          };
       const x = canvasPoint.x;
       const y = canvasPoint.y;
       const distance = Math.hypot(canvasX - x, canvasY - y);
@@ -1424,14 +2195,14 @@ export function LidarSpatialView({
       dragRef.current.lastX = e.clientX;
       dragRef.current.lastY = e.clientY;
 
-      const world = projectLatLonToWorld(centerRef.current.lat, centerRef.current.lon, mapZoom);
+      const world = projectLatLonToWorld(viewCenterRef.current.lat, viewCenterRef.current.lon, mapZoom);
       const nextWorld = {
         x: world.x - deltaX,
         y: world.y - deltaY,
       };
       const nextCenter = clampToKoreaBounds(unprojectWorldToLatLon(nextWorld.x, nextWorld.y, mapZoom));
-      centerRef.current = nextCenter;
-      onMapCenterChange(nextCenter);
+      viewCenterRef.current = nextCenter;
+      setMapViewCenter(nextCenter);
       return;
     }
 
@@ -1484,8 +2255,8 @@ export function LidarSpatialView({
       if (nextZoom === previousZoom) return previousZoom;
 
       const previousWorldCenter = projectLatLonToWorld(
-        centerRef.current.lat,
-        centerRef.current.lon,
+        viewCenterRef.current.lat,
+        viewCenterRef.current.lon,
         previousZoom
       );
       const focusWorldPrevious = {
@@ -1505,8 +2276,8 @@ export function LidarSpatialView({
       const nextCenter = clampToKoreaBounds(
         unprojectWorldToLatLon(nextCenterWorld.x, nextCenterWorld.y, nextZoom)
       );
-      centerRef.current = nextCenter;
-      onMapCenterChange(nextCenter);
+      viewCenterRef.current = nextCenter;
+      setMapViewCenter(nextCenter);
 
       return nextZoom;
     });
@@ -1536,6 +2307,11 @@ export function LidarSpatialView({
     }
   };
 
+  const handleRecenterToSite = () => {
+    viewCenterRef.current = mapCenter;
+    setMapViewCenter(mapCenter);
+  };
+
   return (
     <div className="argus-surface h-full w-full bg-[#0b1016] border-r border-cyan-950/50 flex flex-col relative">
       {/* Corner brackets */}
@@ -1545,20 +2321,36 @@ export function LidarSpatialView({
       <div className="absolute bottom-4 right-4 w-6 h-6 border-r-2 border-b-2 border-cyan-500/40" />
 
       {/* Header */}
-      <div className="px-6 py-4 border-b border-cyan-950/50">
+      <div className="argus-map-header px-6 py-4 border-b border-cyan-950/50">
         <div>
           <h2 className="text-2xl font-bold text-cyan-300 uppercase tracking-[0.08em]">
-            RADAR 공간 뷰
+            국지 방공 레이더 데이터 시각화
           </h2>
           <p className="text-sm text-slate-500 mt-1">
             전술 {mapTheme === 'DARK' ? '다크' : '화이트'} 맵 · 공식 경계/영공/영해 오버레이
+            {showUtmGrid ? ` · UTM Grid Z${utmGridData.zone}N (EPSG:${utmGridData.epsg})` : ''}
+            {showMgrsLabels ? ' · MGRS 100km 라벨' : ''}
           </p>
         </div>
-        <p className="mt-2 text-xs text-slate-400 break-all">
-          중심 좌표 {mapCenter.lat.toFixed(6)}, {mapCenter.lon.toFixed(6)} · 줌 {mapZoom}
-          {' · '}
-          드래그 이동 / 휠 확대·축소
-        </p>
+        <div className="mt-2 flex items-start justify-between gap-2">
+          <p className="text-xs text-slate-400 break-all">
+            진지(동심원) 좌표 {mapCenter.lat.toFixed(6)}, {mapCenter.lon.toFixed(6)}
+            {' · '}지도 중심 {mapViewCenter.lat.toFixed(6)}, {mapViewCenter.lon.toFixed(6)} · 줌 {mapZoom}
+            {' · '}
+            드래그 이동 / 휠 확대·축소
+          </p>
+          <button
+            type="button"
+            onClick={handleRecenterToSite}
+            className={`shrink-0 h-9 min-w-[74px] rounded border px-4 text-sm font-semibold whitespace-nowrap transition-colors ${
+              mapTheme === 'LIGHT'
+                ? 'border-slate-400 bg-white text-slate-800 hover:bg-slate-100'
+                : 'border-cyan-700/70 bg-[#0b1822] text-cyan-200 hover:bg-[#132537]'
+            }`}
+          >
+            현 위치
+          </button>
+        </div>
         <p className={`map-data-status mt-1 text-[11px] ${officialDataLoaded ? 'is-loaded' : 'is-warning'}`}>
           지도 데이터: {officialSourceLabel}
           {!officialDataLoaded && ' · 설정에서 지정한 경로에 공식 GeoJSON을 추가하면 자동 반영됩니다.'}
@@ -1582,12 +2374,14 @@ export function LidarSpatialView({
           onMouseLeave={handleCanvasMouseLeave}
           onWheel={handleCanvasWheel}
           onClick={handleCanvasClick}
-          className={`${isDragging ? 'cursor-grabbing' : 'cursor-grab'} touch-none block w-full h-full`}
+          className={`${
+            isDragging ? 'cursor-grabbing' : hoveredObjectId ? 'cursor-pointer' : 'cursor-grab'
+          } touch-none block w-full h-full`}
         />
       </div>
 
       {/* Legend */}
-      <div className="px-6 py-3 border-t border-cyan-950/50 bg-[#0d131b] text-sm">
+      <div className="argus-map-legend px-6 py-3 border-t border-cyan-950/50 bg-[#0d131b] text-sm">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className="text-cyan-300 text-xs font-semibold uppercase tracking-[0.1em] mr-1 whitespace-nowrap">
             표적 위험 분류

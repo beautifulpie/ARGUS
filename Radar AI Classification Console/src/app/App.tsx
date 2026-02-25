@@ -4,6 +4,7 @@ import { LidarSpatialView } from './components/LidarSpatialView';
 import { SelectedTargetPanel } from './components/SelectedTargetPanel';
 import { ObjectListTable } from './components/ObjectListTable';
 import { EventTimeline } from './components/EventTimeline';
+import { AutoTrackingDialog } from './components/AutoTrackingDialog';
 import {
   SettingsDialog,
   type ConsoleSettings,
@@ -11,6 +12,7 @@ import {
 } from './components/SettingsDialog';
 import {
   updateObjectTracking,
+  consumeMockLostReasons,
   generateSystemStatus,
   generateEvent,
   generateObjectEvent,
@@ -37,15 +39,27 @@ interface RuntimeStatusPayload {
   resources?: RuntimeResourceMetrics;
 }
 
+interface TimelineCsvLogEntry {
+  id: string;
+  timestamp: string;
+  type: string;
+  message: string;
+  objectId?: string;
+  objectClass?: string;
+}
+
 interface RadarRuntimeBridge {
   getStatus?: () => Promise<RuntimeStatusPayload>;
   onStatus?: (handler: (payload: RuntimeStatusPayload) => void) => (() => void) | void;
   updateConfig?: (patch: Record<string, unknown>) => Promise<unknown>;
+  appendEventLogsCsv?: (entries: TimelineCsvLogEntry[]) => Promise<unknown>;
+  pickDirectory?: (options?: { title?: string; defaultPath?: string }) => Promise<unknown>;
+  openEventLogViewer?: () => Promise<unknown>;
 }
 
 const POSITION_CODE_PRESETS: PositionCodePreset[] = [
-  { code: 'ARGUS-HQ', name: 'ARGUS 본부 (서울)', lat: 37.5665, lon: 126.978 },
-  { code: 'ROK-CP-NORTH', name: '북부 지휘소', lat: 37.7582, lon: 126.7777 },
+  { code: 'ARGUS-HQ', name: 'ARGUS 본부 (서울)', lat: 36.3001071, lon: 127.2305427 },
+  { code: 'ROK-CP-NORTH', name: '북부 지휘소', lat: 37.9107827915598, lon: 126.895791134059 },
   { code: 'ROK-CP-SOUTH', name: '남부 지휘소', lat: 35.1796, lon: 129.0756 },
   { code: 'ROK-CP-EAST', name: '동부 지휘소', lat: 37.7519, lon: 128.8761 },
   { code: 'ROK-CP-JEJU', name: '제주 지휘소', lat: 33.4996, lon: 126.5312 },
@@ -54,14 +68,16 @@ const POSITION_CODE_PRESETS: PositionCodePreset[] = [
 
 const DEFAULT_CONSOLE_SETTINGS: ConsoleSettings = {
   mapCenter: {
-    lat: 37.5665,
-    lon: 126.978,
+    lat: 36.3001071,
+    lon: 127.2305427,
   },
   positionCode: 'ARGUS-HQ',
   modelPath: '',
   detectionMode: 'ACCURACY',
   mapLabelLevel: 'EMD',
   mapTheme: 'DARK',
+  showUtmGrid: true,
+  showMgrsLabels: true,
   mapDataPath: '/official',
   mapDataLoadNonce: 0,
 };
@@ -139,6 +155,14 @@ const readInitialSettings = (): ConsoleSettings => {
         mapTheme: parsed.mapTheme === 'LIGHT' || parsed.mapTheme === 'DARK'
           ? parsed.mapTheme
           : loaded.mapTheme,
+        showUtmGrid:
+          typeof parsed.showUtmGrid === 'boolean'
+            ? parsed.showUtmGrid
+            : loaded.showUtmGrid,
+        showMgrsLabels:
+          typeof parsed.showMgrsLabels === 'boolean'
+            ? parsed.showMgrsLabels
+            : loaded.showMgrsLabels,
         mapDataPath:
           typeof parsed.mapDataPath === 'string' && parsed.mapDataPath.trim()
             ? parsed.mapDataPath
@@ -177,17 +201,12 @@ const adjustStatusForConsoleSettings = (
 ): SystemStatus => {
   const tuned = { ...status };
   const modeScale = settings.detectionMode === 'ACCURACY' ? 1.18 : 0.82;
-  const fpsScale = settings.detectionMode === 'ACCURACY' ? 0.86 : 1.18;
 
   const tuneMetric = (value: number | undefined, scale: number) =>
     typeof value === 'number' ? Math.max(0, value * scale) : value;
 
   if (applyPerformanceProfile) {
     tuned.latency = clamp(tuned.latency * modeScale, 0, 5000);
-    tuned.fps = clamp(tuned.fps * fpsScale, 1, 500);
-    if (typeof tuned.measuredFps === 'number') {
-      tuned.measuredFps = clamp(tuned.measuredFps * fpsScale, 1, 500);
-    }
     tuned.modelLatencyP50 = tuneMetric(tuned.modelLatencyP50, modeScale);
     tuned.modelLatencyP95 = tuneMetric(tuned.modelLatencyP95, modeScale);
     tuned.inferenceLatencyP50 = tuneMetric(tuned.inferenceLatencyP50, modeScale);
@@ -205,18 +224,21 @@ const adjustStatusForConsoleSettings = (
   }
   tuned.modelVersion = `${status.modelVersion} · ${modeLabel}`;
 
-  // In SPEED mode, operator view is intentionally normalized to a fixed 30 FPS.
-  if (settings.detectionMode === 'SPEED') {
-    tuned.fps = 30;
-    tuned.measuredFps = 30;
-  }
-
   return tuned;
 };
 
+const getDataFrameStrideForMode = (mode: ConsoleSettings['detectionMode']) =>
+  mode === 'SPEED' ? 4 : 1;
+
+const getMockTickIntervalMsForMode = (mode: ConsoleSettings['detectionMode']) =>
+  mode === 'SPEED' ? 50 : 50;
+
+type MockLostReason = 'OUT_OF_RANGE' | 'SIGNAL_LOST';
+
 const buildObjectChangeEvents = (
   previousObjects: DetectedObject[],
-  nextObjects: DetectedObject[]
+  nextObjects: DetectedObject[],
+  lostReasons?: Map<string, MockLostReason>
 ): TimelineEvent[] => {
   const previousMap = new Map(previousObjects.map((obj) => [obj.id, obj]));
   const nextMap = new Map(nextObjects.map((obj) => [obj.id, obj]));
@@ -275,7 +297,28 @@ const buildObjectChangeEvents = (
 
   previousObjects.forEach((obj) => {
     if (!nextMap.has(obj.id)) {
-      events.push(generateObjectEvent({ ...obj, status: 'LOST' }, 'LOST'));
+      const lostReason = lostReasons?.get(obj.id);
+      if (lostReason === 'OUT_OF_RANGE') {
+        events.push(
+          generateEvent(
+            'WARNING',
+            `관측 반경(35km) 이탈로 트랙 손실 (${obj.id})`,
+            obj.id,
+            obj.class
+          )
+        );
+      } else if (lostReason === 'SIGNAL_LOST') {
+        events.push(
+          generateEvent(
+            'WARNING',
+            `신호 소실로 트랙 손실 (${obj.id})`,
+            obj.id,
+            obj.class
+          )
+        );
+      } else {
+        events.push(generateObjectEvent({ ...obj, status: 'LOST' }, 'LOST'));
+      }
     }
   });
 
@@ -287,9 +330,12 @@ function App() {
   const [settings, setSettings] = useState<ConsoleSettings>(() => readInitialSettings());
   const [previewTheme, setPreviewTheme] = useState<ConsoleSettings['mapTheme'] | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAutoTrackingOpen, setIsAutoTrackingOpen] = useState(false);
+  const [isAutoTrackingEnabled, setIsAutoTrackingEnabled] = useState(false);
   const [isLive, setIsLive] = useState(false);
   const [isFrozen, setIsFrozen] = useState(false);
   const [objects, setObjects] = useState<DetectedObject[]>([]);
+  const [frozenSnapshotObjects, setFrozenSnapshotObjects] = useState<DetectedObject[] | null>(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus>(() => 
@@ -300,6 +346,15 @@ function App() {
   const argusErrorLoggedRef = useRef(false);
   const previousDetectionModeRef = useRef(settings.detectionMode);
   const runtimeResourcesRef = useRef<RuntimeResourceMetrics | null>(null);
+  const pendingTimelineLogEventsRef = useRef<TimelineEvent[]>([]);
+  const dataUpdateTimestampsRef = useRef<number[]>([]);
+  const dataUpdateFpsRef = useRef(0);
+  const mockTickCounterRef = useRef(0);
+  const mockPendingDeltaRef = useRef(0);
+  const mockLastTickTimestampRef = useRef<number | null>(null);
+  const isFrozenRef = useRef(isFrozen);
+  const isLiveRef = useRef(isLive);
+  const frozenObjectsRef = useRef<DetectedObject[] | null>(null);
 
   const mergeRuntimeResources = useCallback((status: SystemStatus, fallback?: SystemStatus): SystemStatus => {
     const runtimeResources = runtimeResourcesRef.current;
@@ -326,12 +381,85 @@ function App() {
     };
   }, []);
 
+  const setDataUpdateFps = useCallback((fps: number) => {
+    const normalized = clamp(fps, 0, 240);
+    dataUpdateFpsRef.current = normalized;
+    setSystemStatus((prev) => {
+      const current = prev.measuredFps ?? prev.fps;
+      if (Math.abs(current - normalized) < 0.05 && Math.abs(prev.fps - normalized) < 0.05) {
+        return prev;
+      }
+      return {
+        ...prev,
+        fps: normalized,
+        measuredFps: normalized,
+      };
+    });
+  }, []);
+
+  const applyDataUpdateFps = useCallback(
+    (status: SystemStatus, forceZero = false): SystemStatus => {
+      const nextFps = forceZero || !isLive || isFrozen ? 0 : dataUpdateFpsRef.current;
+      return {
+        ...status,
+        fps: nextFps,
+        measuredFps: nextFps,
+      };
+    },
+    [isFrozen, isLive]
+  );
+
+  const recordDataUpdateFrame = useCallback(() => {
+    const now =
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+    const windowMs = 4000;
+    const timestamps = dataUpdateTimestampsRef.current;
+    timestamps.push(now);
+    while (timestamps.length > 0 && now - timestamps[0] > windowMs) {
+      timestamps.shift();
+    }
+
+    const fps =
+      timestamps.length >= 2
+        ? ((timestamps.length - 1) * 1000) / Math.max(1, now - timestamps[0])
+        : 0;
+    setDataUpdateFps(fps);
+  }, [setDataUpdateFps]);
+
   useEffect(() => {
     objectsRef.current = objects;
     for (const obj of objects) {
       trackClassByIdRef.current.set(obj.id, obj.class);
     }
   }, [objects]);
+
+  useEffect(() => {
+    isFrozenRef.current = isFrozen;
+  }, [isFrozen]);
+
+  useEffect(() => {
+    isLiveRef.current = isLive;
+  }, [isLive]);
+
+  useEffect(() => {
+    mockTickCounterRef.current = 0;
+    mockPendingDeltaRef.current = 0;
+    mockLastTickTimestampRef.current = null;
+    if (!isLive || isFrozen) {
+      dataUpdateTimestampsRef.current = [];
+      setDataUpdateFps(0);
+    }
+  }, [isLive, isFrozen, setDataUpdateFps]);
+
+  useEffect(() => {
+    mockTickCounterRef.current = 0;
+    mockPendingDeltaRef.current = 0;
+    mockLastTickTimestampRef.current = null;
+    dataUpdateTimestampsRef.current = [];
+    setDataUpdateFps(0);
+  }, [settings.detectionMode, setDataUpdateFps]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -358,7 +486,7 @@ function App() {
       const resources = payload?.resources;
       if (!resources) return;
       runtimeResourcesRef.current = resources;
-      setSystemStatus((prev) => mergeRuntimeResources(prev, prev));
+      setSystemStatus((prev) => applyDataUpdateFps(mergeRuntimeResources(prev, prev)));
     };
 
     if (typeof runtime.getStatus === 'function') {
@@ -388,7 +516,7 @@ function App() {
       disposed = true;
       unsubscribe?.();
     };
-  }, [mergeRuntimeResources]);
+  }, [mergeRuntimeResources, applyDataUpdateFps]);
 
   const appendEvents = useCallback((nextEvents: TimelineEvent[]) => {
     if (nextEvents.length === 0) {
@@ -413,27 +541,112 @@ function App() {
       };
     });
 
+    const runtime = (window as Window & { radarRuntime?: RadarRuntimeBridge }).radarRuntime;
+    if (runtime && typeof runtime.appendEventLogsCsv === 'function') {
+      pendingTimelineLogEventsRef.current.push(...normalizedEvents);
+    }
+
     setEvents((prev) => [...prev, ...normalizedEvents].slice(-MAX_EVENT_LOGS));
   }, []);
 
-  const runMockTick = useCallback(() => {
-    setObjects((prevObjects) => {
-      const nextObjects = updateObjectTracking(prevObjects);
-      appendEvents(buildObjectChangeEvents(prevObjects, nextObjects));
-      return nextObjects;
+  const flushTimelineEventLogs = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+    const runtime = (window as Window & { radarRuntime?: RadarRuntimeBridge }).radarRuntime;
+    if (!runtime || typeof runtime.appendEventLogsCsv !== 'function') return;
+    if (pendingTimelineLogEventsRef.current.length === 0) return;
+
+    const batch = pendingTimelineLogEventsRef.current.splice(0, pendingTimelineLogEventsRef.current.length);
+    const payload: TimelineCsvLogEntry[] = batch.map((event) => {
+      const parsedDate =
+        event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp as unknown as string);
+      const timestampIso = Number.isNaN(parsedDate.getTime())
+        ? new Date().toISOString()
+        : parsedDate.toISOString();
+
+      return {
+        id: event.id,
+        timestamp: timestampIso,
+        type: event.type,
+        message: event.message,
+        objectId: event.objectId,
+        objectClass: event.objectClass,
+      };
     });
+
+    try {
+      await runtime.appendEventLogsCsv(payload);
+    } catch {
+      // If write fails, prepend batch back to queue so it can retry next cycle.
+      pendingTimelineLogEventsRef.current = [...batch, ...pendingTimelineLogEventsRef.current];
+    }
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void flushTimelineEventLogs();
+    }, 60_000);
+
+    return () => {
+      window.clearInterval(interval);
+      void flushTimelineEventLogs();
+    };
+  }, [flushTimelineEventLogs]);
+
+  const runMockTick = useCallback(() => {
+    if (isFrozenRef.current || !isLiveRef.current) {
+      mockLastTickTimestampRef.current = null;
+      return;
+    }
+    const frameStride = getDataFrameStrideForMode(settings.detectionMode);
+    const shouldSkipDataFrame = mockTickCounterRef.current % frameStride !== 0;
+    const defaultTickDeltaSeconds = getMockTickIntervalMsForMode(settings.detectionMode) / 1000;
+    const nowMs =
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+    const previousTickMs = mockLastTickTimestampRef.current;
+    mockLastTickTimestampRef.current = nowMs;
+    const tickDeltaSeconds =
+      previousTickMs === null
+        ? defaultTickDeltaSeconds
+        : clamp((nowMs - previousTickMs) / 1000, 0.01, 2);
+    mockTickCounterRef.current += 1;
+
+    if (!shouldSkipDataFrame) {
+      const mockDeltaSeconds = tickDeltaSeconds + mockPendingDeltaRef.current;
+      mockPendingDeltaRef.current = 0;
+      setObjects((prevObjects) => {
+        if (prevObjects.length === 0) {
+          const seedCount = 3 + Math.floor(Math.random() * 4);
+          const seededObjects: DetectedObject[] = Array.from({ length: seedCount }, () =>
+            generateDetectedObject()
+          );
+          appendEvents(buildObjectChangeEvents(prevObjects, seededObjects));
+          return seededObjects;
+        }
+
+        const nextObjects = updateObjectTracking(prevObjects, mockDeltaSeconds);
+        appendEvents(buildObjectChangeEvents(prevObjects, nextObjects, consumeMockLostReasons()));
+        return nextObjects;
+      });
+      recordDataUpdateFrame();
+    } else {
+      mockPendingDeltaRef.current += tickDeltaSeconds;
+    }
 
     setSystemStatus((prev) =>
       mergeRuntimeResources(
-        adjustStatusForConsoleSettings(
-          generateSystemStatus(true, prev.trackedObjects),
-          settings,
-          true
+        applyDataUpdateFps(
+          adjustStatusForConsoleSettings(
+            generateSystemStatus(true, prev.trackedObjects),
+            settings,
+            true
+          )
         ),
         prev
       )
     );
-  }, [appendEvents, settings, mergeRuntimeResources]);
+  }, [appendEvents, settings, mergeRuntimeResources, recordDataUpdateFrame, applyDataUpdateFps]);
 
   useEffect(() => {
     const runtime = (window as Window & { radarRuntime?: RadarRuntimeBridge }).radarRuntime;
@@ -441,9 +654,10 @@ function App() {
       void runtime.updateConfig({
         detectionMode: settings.detectionMode,
         resourceMonitorIntervalMs: settings.detectionMode === 'SPEED' ? 5000 : 1000,
+        modelPath: settings.modelPath.trim(),
       });
     }
-  }, [settings.detectionMode]);
+  }, [settings.detectionMode, settings.modelPath]);
 
   useEffect(() => {
     if (previousDetectionModeRef.current === settings.detectionMode) {
@@ -475,8 +689,42 @@ function App() {
         }
 
         const frame = await fetchArgusFrame(objectsRef.current);
-        if (isDisposed) {
+        if (isDisposed || isFrozenRef.current || !isLiveRef.current) {
           return;
+        }
+
+        const frameStride = getDataFrameStrideForMode(settings.detectionMode);
+        const shouldSkipDataFrame = mockTickCounterRef.current % frameStride !== 0;
+        mockTickCounterRef.current += 1;
+
+        if (shouldSkipDataFrame) {
+          setSystemStatus((prev) =>
+            mergeRuntimeResources(
+              applyDataUpdateFps(adjustStatusForConsoleSettings(frame.systemStatus, settings, false)),
+              prev
+            )
+          );
+          argusErrorLoggedRef.current = false;
+          return;
+        }
+
+        if (frame.objects.length === 0) {
+          if (ARGUS_CONFIG.fallbackToMock) {
+            runMockTick();
+            argusErrorLoggedRef.current = false;
+            return;
+          }
+
+          if (objectsRef.current.length > 0) {
+            setSystemStatus((prev) =>
+              mergeRuntimeResources(
+                applyDataUpdateFps(adjustStatusForConsoleSettings(frame.systemStatus, settings, false)),
+                prev
+              )
+            );
+            argusErrorLoggedRef.current = false;
+            return;
+          }
         }
 
         for (const obj of frame.objects) {
@@ -485,13 +733,17 @@ function App() {
 
         const derivedEvents = buildObjectChangeEvents(objectsRef.current, frame.objects);
         setObjects(frame.objects);
+        recordDataUpdateFrame();
         setSystemStatus((prev) =>
-          mergeRuntimeResources(adjustStatusForConsoleSettings(frame.systemStatus, settings, false), prev)
+          mergeRuntimeResources(
+            applyDataUpdateFps(adjustStatusForConsoleSettings(frame.systemStatus, settings, false)),
+            prev
+          )
         );
         appendEvents([...derivedEvents, ...frame.events]);
         argusErrorLoggedRef.current = false;
       } catch (error) {
-        if (isDisposed) {
+        if (isDisposed || isFrozenRef.current || !isLiveRef.current) {
           return;
         }
 
@@ -504,8 +756,10 @@ function App() {
         if (ARGUS_CONFIG.fallbackToMock) {
           runMockTick();
         } else {
+          dataUpdateTimestampsRef.current = [];
+          setDataUpdateFps(0);
           setSystemStatus((prev) => ({
-            ...mergeRuntimeResources(prev, prev),
+            ...applyDataUpdateFps(mergeRuntimeResources(prev, prev), true),
             connectionStatus: 'DISCONNECTED',
             sensorStatus: 'DEGRADED',
           }));
@@ -515,7 +769,9 @@ function App() {
       }
     };
 
-    const intervalMs = useArgusBridge ? ARGUS_CONFIG.pollIntervalMs : 1000;
+    const intervalMs = useArgusBridge
+      ? ARGUS_CONFIG.pollIntervalMs
+      : getMockTickIntervalMsForMode(settings.detectionMode);
     void tick();
     const interval = setInterval(() => {
       void tick();
@@ -525,7 +781,18 @@ function App() {
       isDisposed = true;
       clearInterval(interval);
     };
-  }, [isLive, isFrozen, useArgusBridge, runMockTick, appendEvents, mergeRuntimeResources]);
+  }, [
+    isLive,
+    isFrozen,
+    settings.detectionMode,
+    useArgusBridge,
+    runMockTick,
+    recordDataUpdateFrame,
+    applyDataUpdateFps,
+    appendEvents,
+    mergeRuntimeResources,
+    setDataUpdateFps,
+  ]);
 
   // Add initial events and objects when going live
   useEffect(() => {
@@ -549,6 +816,7 @@ function App() {
           initialObjects.push(generateDetectedObject());
         }
         setObjects(initialObjects);
+        recordDataUpdateFrame();
 
         setTimeout(() => {
           appendEvents(
@@ -559,43 +827,77 @@ function App() {
     } else {
       // Clear objects when stopping
       setObjects([]);
+      setFrozenSnapshotObjects(null);
       setSelectedObjectId(null);
-      setSystemStatus((prev) => mergeRuntimeResources(generateSystemStatus(false, 0), prev));
+      dataUpdateTimestampsRef.current = [];
+      setDataUpdateFps(0);
+      setSystemStatus((prev) =>
+        mergeRuntimeResources(applyDataUpdateFps(generateSystemStatus(false, 0), true), prev)
+      );
       argusErrorLoggedRef.current = false;
     }
-  }, [isLive, useArgusBridge, appendEvents, mergeRuntimeResources]);
+  }, [
+    isLive,
+    useArgusBridge,
+    appendEvents,
+    mergeRuntimeResources,
+    recordDataUpdateFrame,
+    setDataUpdateFps,
+    applyDataUpdateFps,
+  ]);
+
+  const visibleObjects = isFrozen && frozenSnapshotObjects ? frozenSnapshotObjects : objects;
 
   // Update system status with current object count
   useEffect(() => {
     setSystemStatus((prev) => ({
-      ...mergeRuntimeResources(prev, prev),
-      trackedObjects: objects.length,
-      activeTracksCount: objects.filter(obj => obj.status === 'STABLE' || obj.status === 'TRACKING').length,
+      ...applyDataUpdateFps(mergeRuntimeResources(prev, prev)),
+      trackedObjects: visibleObjects.length,
+      activeTracksCount: visibleObjects.filter(obj => obj.status === 'STABLE' || obj.status === 'TRACKING').length,
     }));
-  }, [objects, mergeRuntimeResources]);
+  }, [visibleObjects, mergeRuntimeResources, applyDataUpdateFps]);
 
   useEffect(() => {
     if (!selectedObjectId) {
       return;
     }
 
-    const stillExists = objects.some((obj) => obj.id === selectedObjectId);
+    const stillExists = visibleObjects.some((obj) => obj.id === selectedObjectId);
     if (!stillExists) {
       setSelectedObjectId(null);
     }
-  }, [objects, selectedObjectId]);
+  }, [visibleObjects, selectedObjectId]);
 
   const handleToggleLive = useCallback(() => {
-    setIsLive((prev) => !prev);
+    setIsLive((prev) => {
+      const next = !prev;
+      isLiveRef.current = next;
+      return next;
+    });
     setIsFrozen(false);
+    isFrozenRef.current = false;
+    frozenObjectsRef.current = null;
+    setFrozenSnapshotObjects(null);
   }, []);
 
   const handleFreeze = useCallback(() => {
-    setIsFrozen((prev) => !prev);
-    if (!isFrozen) {
+    const next = !isFrozenRef.current;
+    isFrozenRef.current = next;
+    setIsFrozen(next);
+
+    if (next) {
+      // Keep current tracks on screen while data updates are paused.
+      frozenObjectsRef.current = objectsRef.current;
+      setFrozenSnapshotObjects(objectsRef.current);
+      if (objectsRef.current.length > 0) {
+        setObjects(objectsRef.current);
+      }
       appendEvents([generateEvent('INFO', '디스플레이 정지됨')]);
+    } else {
+      frozenObjectsRef.current = null;
+      setFrozenSnapshotObjects(null);
     }
-  }, [isFrozen, appendEvents]);
+  }, [appendEvents]);
 
   const handleMarkEvent = useCallback(() => {
     appendEvents([generateEvent('WARNING', '운영자가 이벤트를 표시함')]);
@@ -607,6 +909,23 @@ function App() {
     console.log('Export log:', events);
     console.log('Export objects:', objects);
   }, [events, objects, appendEvents]);
+
+  const handleOpenLogViewer = useCallback(() => {
+    const runtime = (window as Window & { radarRuntime?: RadarRuntimeBridge }).radarRuntime;
+    if (runtime && typeof runtime.openEventLogViewer === 'function') {
+      void runtime.openEventLogViewer();
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      window.open('/log-viewer.html', '_blank', 'noopener,noreferrer,width=1280,height=820');
+    }
+  }, []);
+
+  const handleClearTimelineView = useCallback(() => {
+    // Clear only on-screen timeline events. CSV persistence queue remains untouched.
+    setEvents([]);
+  }, []);
 
   const handleSelectObject = useCallback((id: string | null) => {
     setSelectedObjectId(id);
@@ -621,6 +940,27 @@ function App() {
     setIsSettingsOpen(false);
   }, []);
 
+  const handleOpenAutoTracking = useCallback(() => {
+    setIsAutoTrackingOpen(true);
+  }, []);
+
+  const handleCloseAutoTracking = useCallback(() => {
+    setIsAutoTrackingOpen(false);
+  }, []);
+
+  const handleAutoTrackingEnabledChange = useCallback(
+    (next: boolean) => {
+      setIsAutoTrackingEnabled(next);
+      appendEvents([
+        generateEvent(
+          'INFO',
+          next ? 'AI 자동 추적 활성화됨 (AUTO TRACK ON)' : 'AI 자동 추적 비활성화됨 (AUTO TRACK OFF)'
+        ),
+      ]);
+    },
+    [appendEvents]
+  );
+
   const handleSaveSettings = useCallback((nextSettings: ConsoleSettings) => {
     const normalizedCenter = sanitizeCenter(nextSettings.mapCenter.lat, nextSettings.mapCenter.lon);
     setSettings({
@@ -631,10 +971,10 @@ function App() {
     });
   }, []);
 
-  const selectedObject = objects.find(obj => obj.id === selectedObjectId) || null;
+  const selectedObject = visibleObjects.find(obj => obj.id === selectedObjectId) || null;
   const effectiveTheme = previewTheme ?? settings.mapTheme;
   const isLightTheme = effectiveTheme === 'LIGHT';
-  const threatCount = objects.filter(
+  const threatCount = visibleObjects.filter(
     (obj) => obj.riskLevel === 'HIGH' || obj.riskLevel === 'CRITICAL'
   ).length;
 
@@ -656,26 +996,24 @@ function App() {
         onMarkEvent={handleMarkEvent}
         onExport={handleExport}
         onOpenSettings={handleOpenSettings}
+        onOpenAutoTracking={handleOpenAutoTracking}
+        onOpenLogViewer={handleOpenLogViewer}
       />
 
       {/* Main Content Grid */}
-      <div className="flex-1 grid grid-cols-[minmax(720px,44vw)_1fr] grid-rows-[500px_1fr_minmax(260px,30vh)] overflow-hidden">
+      <div className="argus-main-grid flex-1 grid grid-cols-[minmax(700px,43vw)_1fr] grid-rows-[470px_1fr_minmax(232px,27vh)] overflow-hidden">
         {/* Left Panel - LiDAR Spatial View (spans 3 rows) */}
         <div className="row-span-3">
           <LidarSpatialView
-            objects={objects}
+            objects={visibleObjects}
             selectedObjectId={selectedObjectId}
             onSelectObject={handleSelectObject}
             mapCenter={settings.mapCenter}
-            onMapCenterChange={(nextCenter) =>
-              setSettings((prev) => ({
-                ...prev,
-                mapCenter: sanitizeCenter(nextCenter.lat, nextCenter.lon),
-                positionCode: '',
-              }))
-            }
+            detectionMode={settings.detectionMode}
             mapTheme={effectiveTheme}
             mapLabelLevel={settings.mapLabelLevel}
+            showUtmGrid={settings.showUtmGrid}
+            showMgrsLabels={settings.showMgrsLabels}
             mapDataPath={settings.mapDataPath}
             mapDataLoadNonce={settings.mapDataLoadNonce}
           />
@@ -689,7 +1027,7 @@ function App() {
         {/* Right Middle - Object List Table */}
         <div className="overflow-hidden">
           <ObjectListTable
-            objects={objects}
+            objects={visibleObjects}
             selectedObjectId={selectedObjectId}
             onSelectObject={handleSelectObject}
           />
@@ -701,12 +1039,16 @@ function App() {
             className={`w-1/2 min-h-0 ${isLightTheme ? 'border-r border-slate-300/80' : 'border-r border-cyan-950/50'}`}
           >
             <CandidateTracksPanel 
-              objects={objects} 
+              objects={visibleObjects} 
               onSelectObject={handleSelectObject} 
             />
           </div>
           <div className="w-1/2 min-h-0">
-            <EventTimeline events={events} objects={objects} />
+            <EventTimeline
+              events={events}
+              objects={visibleObjects}
+              onClearEvents={handleClearTimelineView}
+            />
           </div>
         </div>
       </div>
@@ -718,6 +1060,14 @@ function App() {
         onClose={handleCloseSettings}
         onSave={handleSaveSettings}
         onPreviewThemeChange={setPreviewTheme}
+      />
+      <AutoTrackingDialog
+        open={isAutoTrackingOpen}
+        onClose={handleCloseAutoTracking}
+        objects={visibleObjects}
+        selectedObjectId={selectedObjectId}
+        enabled={isAutoTrackingEnabled}
+        onEnabledChange={handleAutoTrackingEnabledChange}
       />
     </div>
   );
