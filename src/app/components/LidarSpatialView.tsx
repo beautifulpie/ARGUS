@@ -160,7 +160,8 @@ const DARK_TILE_ALPHA = 0.28;
 const LIGHT_TILE_ALPHA = 0.48;
 const TACTICAL_DARK_OVERLAY = 'rgba(3, 8, 14, 0.62)';
 const TACTICAL_LIGHT_OVERLAY = 'rgba(10, 18, 28, 0.16)';
-const SHOW_BASEMAP_IN_LIGHT_THEME = false;
+const SHOW_BASEMAP_IN_LIGHT_THEME =
+  import.meta.env.DEV || import.meta.env.VITE_SHOW_LIGHT_BASEMAP === 'true';
 const DEFAULT_OFFICIAL_DATA_BASE_PATH = '/official';
 const OFFICIAL_BOUNDARY_FILES = [
   'korea_boundary.geojson',
