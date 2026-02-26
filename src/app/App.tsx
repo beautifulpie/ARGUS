@@ -5,6 +5,7 @@ import { SelectedTargetPanel } from './components/SelectedTargetPanel';
 import { ObjectListTable } from './components/ObjectListTable';
 import { EventTimeline } from './components/EventTimeline';
 import { AutoTrackingDialog } from './components/AutoTrackingDialog';
+import { DeveloperAccessDialog } from './components/DeveloperAccessDialog';
 import {
   SettingsDialog,
   type ConsoleSettings,
@@ -21,6 +22,12 @@ import {
 import { ARGUS_CONFIG, isArgusConfigured } from './config/argus';
 import { fetchArgusFrame } from './services/argusBridge';
 import {
+  LAYOUT_DEV_CONFIG_STORAGE_KEY,
+  type LayoutDevConfig,
+  sanitizeLayoutDevConfig,
+  readLayoutDevConfig,
+} from './layoutDevConfig';
+import {
   TimelineEvent,
   SystemStatus,
   DetectedObject,
@@ -32,6 +39,12 @@ import { CandidateTracksPanel } from './components/CandidateTracksPanel';
 const MAX_EVENT_LOGS = 400;
 const SETTINGS_STORAGE_KEY = 'argus.console.settings.v1';
 const MAP_CALIBRATION_STORAGE_KEY = 'argus.map.calibration.v1';
+const DEV_MODEL_PATH_STORAGE_KEY = 'argus.developer.model-path.v1';
+
+const DEV_CREDENTIAL_HASH = {
+  id: '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918',
+  password: 'ee260f08526f9930ff7d9450916b76a7ce3d2f4b924dfdb84dd0fa77dfa1d8aa',
+} as const;
 
 type RuntimeResourceMetrics = Partial<Pick<SystemStatus, 'cpuUsage' | 'gpuUsage' | 'ramUsage'>>;
 
@@ -55,6 +68,7 @@ interface RadarRuntimeBridge {
   appendEventLogsCsv?: (entries: TimelineCsvLogEntry[]) => Promise<unknown>;
   pickDirectory?: (options?: { title?: string; defaultPath?: string }) => Promise<unknown>;
   openEventLogViewer?: () => Promise<unknown>;
+  openLayoutDevConsole?: () => Promise<unknown>;
 }
 
 const POSITION_CODE_PRESETS: PositionCodePreset[] = [
@@ -88,6 +102,15 @@ const sanitizeCenter = (lat: number, lon: number) => ({
   lat: clamp(lat, 32.7, 39.9),
   lon: clamp(lon, 123.0, 132.2),
 });
+
+const sha256Hex = async (value: string): Promise<string> => {
+  const encoded = new TextEncoder().encode(value);
+  const digest = await window.crypto.subtle.digest('SHA-256', encoded);
+  const bytes = new Uint8Array(digest);
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+};
 
 const normalizeMapLabelLevel = (
   value: unknown,
@@ -189,6 +212,18 @@ const readInitialSettings = (): ConsoleSettings => {
     }
   } catch {
     // Ignore malformed calibration payload.
+  }
+
+  try {
+    const devModelPath = window.localStorage.getItem(DEV_MODEL_PATH_STORAGE_KEY);
+    if (typeof devModelPath === 'string' && devModelPath.trim()) {
+      loaded = {
+        ...loaded,
+        modelPath: devModelPath.trim(),
+      };
+    }
+  } catch {
+    // Ignore malformed developer model path payload.
   }
 
   return loaded;
@@ -328,10 +363,14 @@ const buildObjectChangeEvents = (
 function App() {
   const useArgusBridge = isArgusConfigured();
   const [settings, setSettings] = useState<ConsoleSettings>(() => readInitialSettings());
+  const [layoutDevConfig, setLayoutDevConfig] = useState<LayoutDevConfig>(() => readLayoutDevConfig());
   const [previewTheme, setPreviewTheme] = useState<ConsoleSettings['mapTheme'] | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAutoTrackingOpen, setIsAutoTrackingOpen] = useState(false);
   const [isAutoTrackingEnabled, setIsAutoTrackingEnabled] = useState(false);
+  const [isDeveloperAuthOpen, setIsDeveloperAuthOpen] = useState(false);
+  const [isDeveloperAuthPending, setIsDeveloperAuthPending] = useState(false);
+  const [developerAuthError, setDeveloperAuthError] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
   const [isFrozen, setIsFrozen] = useState(false);
   const [objects, setObjects] = useState<DetectedObject[]>([]);
@@ -355,6 +394,7 @@ function App() {
   const isFrozenRef = useRef(isFrozen);
   const isLiveRef = useRef(isLive);
   const frozenObjectsRef = useRef<DetectedObject[] | null>(null);
+  const logoSecretTapRef = useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
 
   const mergeRuntimeResources = useCallback((status: SystemStatus, fallback?: SystemStatus): SystemStatus => {
     const runtimeResources = runtimeResourcesRef.current;
@@ -473,6 +513,54 @@ function App() {
       })
     );
   }, [settings]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(DEV_MODEL_PATH_STORAGE_KEY, settings.modelPath ?? '');
+  }, [settings.modelPath]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      LAYOUT_DEV_CONFIG_STORAGE_KEY,
+      JSON.stringify(sanitizeLayoutDevConfig(layoutDevConfig))
+    );
+  }, [layoutDevConfig]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== LAYOUT_DEV_CONFIG_STORAGE_KEY) return;
+      setLayoutDevConfig(readLayoutDevConfig());
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== DEV_MODEL_PATH_STORAGE_KEY) return;
+      const nextModelPath = typeof event.newValue === 'string' ? event.newValue : '';
+      setSettings((prev) => {
+        if (prev.modelPath === nextModelPath) return prev;
+        return {
+          ...prev,
+          modelPath: nextModelPath,
+        };
+      });
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -922,6 +1010,75 @@ function App() {
     }
   }, []);
 
+  const handleOpenLayoutDevConsole = useCallback(() => {
+    const runtime = (window as Window & { radarRuntime?: RadarRuntimeBridge }).radarRuntime;
+    if (runtime && typeof runtime.openLayoutDevConsole === 'function') {
+      void runtime.openLayoutDevConsole();
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      window.open(
+        '/layout-dev-console.html',
+        'argus-layout-dev-console',
+        'noopener,noreferrer,width=640,height=760'
+      );
+    }
+  }, []);
+
+  const handleLogoSecretTap = useCallback(() => {
+    const now = Date.now();
+    const tapState = logoSecretTapRef.current;
+    if (now - tapState.lastAt > 1800) {
+      tapState.count = 0;
+    }
+    tapState.lastAt = now;
+    tapState.count += 1;
+
+    if (tapState.count >= 10) {
+      tapState.count = 0;
+      setDeveloperAuthError(null);
+      setIsDeveloperAuthOpen(true);
+    }
+  }, []);
+
+  const handleCloseDeveloperAuth = useCallback(() => {
+    if (isDeveloperAuthPending) return;
+    setDeveloperAuthError(null);
+    setIsDeveloperAuthOpen(false);
+  }, [isDeveloperAuthPending]);
+
+  const handleDeveloperAuthSubmit = useCallback(
+    async ({ id, password }: { id: string; password: string }) => {
+      if (!id || !password) {
+        setDeveloperAuthError('인증 정보를 입력해 주세요.');
+        return;
+      }
+
+      try {
+        setIsDeveloperAuthPending(true);
+        setDeveloperAuthError(null);
+        const [idHash, passwordHash] = await Promise.all([sha256Hex(id), sha256Hex(password)]);
+        const authenticated =
+          idHash === DEV_CREDENTIAL_HASH.id && passwordHash === DEV_CREDENTIAL_HASH.password;
+
+        if (!authenticated) {
+          setDeveloperAuthError('인증에 실패했습니다.');
+          return;
+        }
+
+        setIsDeveloperAuthOpen(false);
+        appendEvents([generateEvent('INFO', '개발자 레이아웃 콘솔 열림')]);
+        handleOpenLayoutDevConsole();
+      } catch {
+        setDeveloperAuthError('인증 처리 중 오류가 발생했습니다.');
+      } finally {
+        setIsDeveloperAuthPending(false);
+      }
+    },
+    [appendEvents, handleOpenLayoutDevConsole]
+  );
+
   const handleClearTimelineView = useCallback(() => {
     // Clear only on-screen timeline events. CSV persistence queue remains untouched.
     setEvents([]);
@@ -998,10 +1155,21 @@ function App() {
         onOpenSettings={handleOpenSettings}
         onOpenAutoTracking={handleOpenAutoTracking}
         onOpenLogViewer={handleOpenLogViewer}
+        onLogoSecretTap={handleLogoSecretTap}
+        layoutDevConfig={layoutDevConfig}
       />
 
       {/* Main Content Grid */}
-      <div className="argus-main-grid flex-1 grid grid-cols-[minmax(700px,43vw)_1fr] grid-rows-[470px_1fr_minmax(232px,27vh)] overflow-hidden">
+      <div
+        className="argus-main-grid flex-1 grid overflow-hidden"
+        style={{
+          gridTemplateColumns: `minmax(700px, ${layoutDevConfig.leftColumnVw}vw) 1fr`,
+          gridTemplateRows: `${layoutDevConfig.topRowPx}px minmax(${layoutDevConfig.trackedRowMinPx}px, 1fr) minmax(${layoutDevConfig.bottomRowPx}px, ${Math.max(
+            18,
+            Math.round(layoutDevConfig.bottomRowPx / 8.6)
+          )}vh)`,
+        }}
+      >
         {/* Left Panel - LiDAR Spatial View (spans 3 rows) */}
         <div className="row-span-3">
           <LidarSpatialView
@@ -1016,12 +1184,13 @@ function App() {
             showMgrsLabels={settings.showMgrsLabels}
             mapDataPath={settings.mapDataPath}
             mapDataLoadNonce={settings.mapDataLoadNonce}
+            layoutDevConfig={layoutDevConfig}
           />
         </div>
 
         {/* Right Top - Selected Target Panel */}
         <div className="overflow-hidden">
-          <SelectedTargetPanel selectedObject={selectedObject} />
+          <SelectedTargetPanel selectedObject={selectedObject} layoutDevConfig={layoutDevConfig} />
         </div>
 
         {/* Right Middle - Object List Table */}
@@ -1030,29 +1199,41 @@ function App() {
             objects={visibleObjects}
             selectedObjectId={selectedObjectId}
             onSelectObject={handleSelectObject}
+            layoutDevConfig={layoutDevConfig}
           />
         </div>
 
         {/* Bottom Panel - Split: Candidate Tracks & Event Timeline */}
         <div className="overflow-hidden flex min-h-0">
           <div
-            className={`w-1/2 min-h-0 ${isLightTheme ? 'border-r border-slate-300/80' : 'border-r border-cyan-950/50'}`}
+            className={`min-h-0 ${isLightTheme ? 'border-r border-slate-300/80' : 'border-r border-cyan-950/50'}`}
+            style={{ width: `${layoutDevConfig.bottomLeftPercent}%` }}
           >
             <CandidateTracksPanel 
               objects={visibleObjects} 
               onSelectObject={handleSelectObject} 
+              layoutDevConfig={layoutDevConfig}
             />
           </div>
-          <div className="w-1/2 min-h-0">
+          <div className="min-h-0" style={{ width: `${100 - layoutDevConfig.bottomLeftPercent}%` }}>
             <EventTimeline
               events={events}
               objects={visibleObjects}
               onClearEvents={handleClearTimelineView}
+              layoutDevConfig={layoutDevConfig}
             />
           </div>
         </div>
       </div>
 
+      <DeveloperAccessDialog
+        open={isDeveloperAuthOpen}
+        pending={isDeveloperAuthPending}
+        errorMessage={developerAuthError}
+        mapTheme={effectiveTheme}
+        onClose={handleCloseDeveloperAuth}
+        onSubmit={handleDeveloperAuthSubmit}
+      />
       <SettingsDialog
         open={isSettingsOpen}
         settings={settings}

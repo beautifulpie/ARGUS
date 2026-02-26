@@ -1,9 +1,11 @@
 import { DetectedObject } from '../types';
 import { Radio } from 'lucide-react';
+import { type LayoutDevConfig } from '../layoutDevConfig';
 
 interface CandidateTracksPanelProps {
   objects: DetectedObject[];
   onSelectObject: (id: string) => void;
+  layoutDevConfig: LayoutDevConfig;
 }
 
 const CLASS_NAMES_KR: Record<string, string> = {
@@ -22,8 +24,15 @@ const getAdaptiveFontClass = (value: string, compactAt = 11, tightAt = 17): stri
   return 'text-[13px]';
 };
 
-export function CandidateTracksPanel({ objects, onSelectObject }: CandidateTracksPanelProps) {
+export function CandidateTracksPanel({
+  objects,
+  onSelectObject,
+  layoutDevConfig,
+}: CandidateTracksPanelProps) {
   const candidates = objects.filter((obj) => obj.status === 'CANDIDATE');
+  const candidateScale = layoutDevConfig.candidateFontScale;
+  const scaledPx = (base: number) => `${(base * candidateScale).toFixed(1)}px`;
+  const scaledRem = (base: number) => `${(base * candidateScale).toFixed(3)}rem`;
 
   const getRiskBadge = (riskLevel: string): { label: string; className: string } => {
     switch (riskLevel) {
@@ -63,16 +72,22 @@ export function CandidateTracksPanel({ objects, onSelectObject }: CandidateTrack
   };
 
   return (
-    <div className="argus-surface flex flex-col h-full bg-[#0b1016] border-t border-cyan-950/50">
+    <div
+      className="argus-candidate-panel argus-surface flex flex-col h-full bg-[#0b1016] border-t border-cyan-950/50"
+      style={{ ['--argus-candidate-font-scale' as string]: String(layoutDevConfig.candidateFontScale) }}
+    >
       <div className="argus-section-header px-6 py-[18px] border-b border-cyan-950/50 flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
-          <h2 className="text-2xl font-bold text-amber-400 uppercase tracking-[0.08em] flex items-center gap-2 whitespace-nowrap">
+          <h2
+            className="argus-candidate-title text-2xl font-bold text-amber-400 uppercase tracking-[0.08em] flex items-center gap-2 whitespace-nowrap"
+            style={{ fontSize: scaledRem(1.5) }}
+          >
             <Radio className="w-5 h-5" />
             후보 추적군
           </h2>
-          <span className="text-sm text-slate-500 whitespace-nowrap">신호 손실 / 예측 추적군</span>
+          <span className="argus-candidate-subtitle text-sm text-slate-500 whitespace-nowrap" style={{ fontSize: scaledPx(14) }}>신호 손실 / 예측 추적군</span>
         </div>
-        <span className="candidate-active-chip inline-flex items-center border border-amber-700/60 bg-amber-950/35 text-amber-200 text-xs px-2.5 py-1 rounded font-semibold tabular-nums">
+        <span className="candidate-active-chip inline-flex items-center border border-amber-700/60 bg-amber-950/35 text-amber-200 text-xs px-2.5 py-1 rounded font-semibold tabular-nums" style={{ fontSize: scaledPx(12) }}>
           {candidates.length} ACTIVE
         </span>
       </div>
@@ -80,7 +95,7 @@ export function CandidateTracksPanel({ objects, onSelectObject }: CandidateTrack
       <div className="flex-1 overflow-auto">
         {candidates.length === 0 ? (
           <div className="flex items-center justify-center h-36">
-            <p className="text-base text-slate-500">현재 후보 추적군 없음</p>
+            <p className="text-base text-slate-500" style={{ fontSize: scaledRem(1) }}>현재 후보 추적군 없음</p>
           </div>
         ) : (
           <table className="argus-data-table w-full table-fixed text-[13px] leading-[1.35]">

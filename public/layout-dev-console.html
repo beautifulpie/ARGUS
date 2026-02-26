@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ARGUS Layout Developer Console</title>
+    <style>
+      @font-face {
+        font-family: "ARGUS Korean";
+        src: url("/fonts/NotoSansCJKkr-Regular.otf") format("opentype");
+        font-weight: 400;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "ARGUS Korean";
+        src: url("/fonts/NotoSansCJKkr-Bold.otf") format("opentype");
+        font-weight: 700;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      :root {
+        color-scheme: dark;
+        --bg: #0a1118;
+        --panel: #0d1620;
+        --line: rgba(56, 189, 248, 0.35);
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #22d3ee;
+      }
+
+      body {
+        margin: 0;
+        font-family: "ARGUS Korean", "Noto Sans CJK KR", "Malgun Gothic", "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .wrap {
+        padding: 16px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 10px;
+        padding: 14px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .desc {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .section {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+      }
+
+      .section:first-of-type {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .section-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: #c9e8ff;
+        margin-bottom: 8px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 180px 1fr 90px;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .label {
+        font-size: 12px;
+        color: var(--text);
+      }
+
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+
+      input[type="number"] {
+        width: 100%;
+        height: 30px;
+        border-radius: 6px;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        background: rgba(10, 17, 24, 0.8);
+        color: var(--text);
+        font-size: 12px;
+        padding: 0 8px;
+        box-sizing: border-box;
+        font-family: "ARGUS Korean", "Noto Sans CJK KR", "Malgun Gothic", "Segoe UI", sans-serif;
+      }
+
+      .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      button {
+        height: 34px;
+        border-radius: 6px;
+        border: 1px solid rgba(56, 189, 248, 0.45);
+        background: rgba(8, 47, 73, 0.45);
+        color: #d9f2ff;
+        font-size: 13px;
+        font-weight: 700;
+        padding: 0 12px;
+        cursor: pointer;
+        font-family: "ARGUS Korean", "Noto Sans CJK KR", "Malgun Gothic", "Segoe UI", sans-serif;
+      }
+
+      button.secondary {
+        border-color: rgba(148, 163, 184, 0.45);
+        background: rgba(15, 23, 42, 0.6);
+        color: #cbd5e1;
+      }
+
+      .snapshot {
+        margin-top: 12px;
+        font-family: "JetBrains Mono", "Consolas", monospace;
+        font-size: 11px;
+        color: var(--muted);
+        white-space: pre-wrap;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 8px;
+        padding: 10px;
+        background: rgba(2, 8, 16, 0.75);
+      }
+
+      .model-row {
+        display: grid;
+        grid-template-columns: 120px 1fr auto auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .model-input {
+        width: 100%;
+        height: 34px;
+        border-radius: 6px;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        background: rgba(10, 17, 24, 0.8);
+        color: var(--text);
+        font-size: 12px;
+        padding: 0 10px;
+        box-sizing: border-box;
+        font-family: "ARGUS Korean", "Noto Sans CJK KR", "Malgun Gothic", "Segoe UI", sans-serif;
+      }
+
+      .model-status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .resolution-grid {
+        display: grid;
+        grid-template-columns: 110px 1fr 1fr auto auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .resolution-select {
+        width: 100%;
+        height: 34px;
+        border-radius: 6px;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        background: rgba(10, 17, 24, 0.8);
+        color: var(--text);
+        font-size: 12px;
+        padding: 0 10px;
+        box-sizing: border-box;
+        font-family: "ARGUS Korean", "Noto Sans CJK KR", "Malgun Gothic", "Segoe UI", sans-serif;
+      }
+
+      .resolution-input {
+        width: 100%;
+        height: 34px;
+        border-radius: 6px;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        background: rgba(10, 17, 24, 0.8);
+        color: var(--text);
+        font-size: 12px;
+        padding: 0 10px;
+        box-sizing: border-box;
+        font-family: "JetBrains Mono", "Consolas", monospace;
+      }
+
+      .resolution-status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="panel">
+        <h1>레이아웃 조정 콘솔</h1>
+        <p class="desc">메인 콘솔의 주요 레이아웃 값을 실시간으로 조절합니다.</p>
+
+        <div class="section">
+          <div class="section-title">상태 바</div>
+          <div id="statusRows"></div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">메인 그리드</div>
+          <div id="mainRows"></div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">지도 패널</div>
+          <div id="mapRows"></div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">해상도 시뮬레이터</div>
+          <div class="resolution-grid">
+            <span class="label">프리셋</span>
+            <select id="resolutionPreset" class="resolution-select"></select>
+            <input
+              id="resolutionWidthInput"
+              class="resolution-input"
+              type="number"
+              min="900"
+              step="1"
+              placeholder="width"
+            />
+            <button id="resolutionApplyButton" type="button">적용</button>
+            <button id="resolutionReadButton" type="button" class="secondary">현재값</button>
+
+            <span class="label">사용자 지정</span>
+            <input
+              id="resolutionHeightInput"
+              class="resolution-input"
+              type="number"
+              min="620"
+              step="1"
+              placeholder="height"
+            />
+          </div>
+          <div id="resolutionStatus" class="resolution-status">메인 창 해상도 정보를 확인 중...</div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">모델 설정</div>
+          <div class="model-row">
+            <span class="label">모델 경로</span>
+            <input id="modelPathInput" class="model-input" type="text" placeholder="/home/jung/models/argus_brain.onnx" />
+            <button id="modelBrowseButton" type="button">경로 탐색</button>
+            <button id="modelApplyButton" type="button">적용</button>
+          </div>
+          <div id="modelPathStatus" class="model-status">현재 모델 경로를 확인 중...</div>
+        </div>
+
+        <div class="actions">
+          <button id="resetButton" type="button" class="secondary">기본값 복원</button>
+          <button id="closeButton" type="button" class="secondary">닫기</button>
+        </div>
+
+        <div id="snapshot" class="snapshot"></div>
+      </div>
+    </div>
+
+    <script>
+      const STORAGE_KEY = "argus.layout.dev.config.v1";
+      const MODEL_PATH_KEY = "argus.developer.model-path.v1";
+      const RESOLUTION_SIM_STORAGE_KEY = "argus.layout.resolution.simulator.v1";
+      const RESOLUTION_PRESETS = Object.freeze([
+        { key: "1366x768", label: "HD 1366 x 768", width: 1366, height: 768 },
+        { key: "1600x900", label: "HD+ 1600 x 900", width: 1600, height: 900 },
+        { key: "1920x1080", label: "FHD 1920 x 1080", width: 1920, height: 1080 },
+        { key: "2560x1440", label: "QHD 2560 x 1440", width: 2560, height: 1440 },
+        { key: "custom", label: "사용자 지정", width: 0, height: 0 },
+      ]);
+      const DEFAULT_CONFIG = Object.freeze({
+        statusSystemFr: 0.95,
+        statusPerformanceFr: 1.55,
+        statusControlsFr: 1.05,
+        statusCardPaddingY: 10,
+        metricBoxHeight: 54,
+        controlButtonHeight: 40,
+        statusFontScale: 1,
+        leftColumnVw: 43,
+        topRowPx: 470,
+        trackedRowMinPx: 130,
+        bottomRowPx: 232,
+        bottomLeftPercent: 50,
+        mapHeaderPaddingY: 16,
+        mapLegendPaddingY: 12,
+        mapFontScale: 1,
+        selectedPanelFontScale: 1,
+        tableFontScale: 1,
+        candidateFontScale: 1,
+        timelineFontScale: 1,
+      });
+
+      const FIELD_DEFS = [
+        { key: "statusSystemFr", label: "시스템 영역 비율", min: 0.7, max: 1.6, step: 0.05, section: "statusRows" },
+        { key: "statusPerformanceFr", label: "퍼포먼스 영역 비율", min: 1.0, max: 2.3, step: 0.05, section: "statusRows" },
+        { key: "statusControlsFr", label: "컨트롤 영역 비율", min: 0.8, max: 1.8, step: 0.05, section: "statusRows" },
+        { key: "statusCardPaddingY", label: "상태 카드 상하 여백", min: 6, max: 18, step: 1, section: "statusRows" },
+        { key: "metricBoxHeight", label: "퍼포먼스 박스 높이", min: 42, max: 72, step: 1, section: "statusRows" },
+        { key: "controlButtonHeight", label: "컨트롤 버튼 높이", min: 32, max: 56, step: 1, section: "statusRows" },
+        { key: "statusFontScale", label: "상태바 폰트 스케일", min: 0.75, max: 1.6, step: 0.05, section: "statusRows" },
+        { key: "leftColumnVw", label: "좌측 패널 폭 (vw)", min: 36, max: 52, step: 1, section: "mainRows" },
+        { key: "topRowPx", label: "우측 상단 높이 (px)", min: 380, max: 620, step: 5, section: "mainRows" },
+        { key: "trackedRowMinPx", label: "추적된 객체 최소 높이 (px)", min: 90, max: 280, step: 2, section: "mainRows" },
+        { key: "bottomRowPx", label: "하단 최소 높이 (px)", min: 170, max: 360, step: 2, section: "mainRows" },
+        { key: "bottomLeftPercent", label: "하단 좌측 비율 (%)", min: 35, max: 65, step: 1, section: "mainRows" },
+        { key: "mapHeaderPaddingY", label: "지도 헤더 상하 여백", min: 8, max: 24, step: 1, section: "mapRows" },
+        { key: "mapLegendPaddingY", label: "지도 하단 상하 여백", min: 8, max: 24, step: 1, section: "mapRows" },
+        { key: "mapFontScale", label: "지도 UI 폰트 스케일", min: 0.75, max: 1.6, step: 0.05, section: "mapRows" },
+        { key: "selectedPanelFontScale", label: "비행체 정보 폰트 스케일", min: 0.75, max: 1.6, step: 0.05, section: "mapRows" },
+        { key: "tableFontScale", label: "추적된 객체 폰트 스케일", min: 0.75, max: 1.6, step: 0.05, section: "mapRows" },
+        { key: "candidateFontScale", label: "후보 추적군 폰트 스케일", min: 0.75, max: 1.6, step: 0.05, section: "mapRows" },
+        { key: "timelineFontScale", label: "타임라인 폰트 스케일", min: 0.75, max: 1.6, step: 0.05, section: "mapRows" },
+      ];
+
+      const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+      const toFinite = (input, fallback) => {
+        const numeric = Number(input);
+        return Number.isFinite(numeric) ? numeric : fallback;
+      };
+
+      const sanitizeConfig = (raw) => {
+        const next = {};
+        FIELD_DEFS.forEach((field) => {
+          const fallback = DEFAULT_CONFIG[field.key];
+          const value = clamp(toFinite(raw?.[field.key], fallback), field.min, field.max);
+          next[field.key] = field.step < 1 ? Math.round(value * 100) / 100 : Math.round(value);
+        });
+        return next;
+      };
+
+      const readConfig = () => {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return { ...DEFAULT_CONFIG };
+          return sanitizeConfig(JSON.parse(raw));
+        } catch {
+          return { ...DEFAULT_CONFIG };
+        }
+      };
+
+      const writeConfig = (next) => {
+        const normalized = sanitizeConfig(next);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+        return normalized;
+      };
+
+      const snapshot = document.getElementById("snapshot");
+      const resetButton = document.getElementById("resetButton");
+      const closeButton = document.getElementById("closeButton");
+      const modelPathInput = document.getElementById("modelPathInput");
+      const modelBrowseButton = document.getElementById("modelBrowseButton");
+      const modelApplyButton = document.getElementById("modelApplyButton");
+      const modelPathStatus = document.getElementById("modelPathStatus");
+      const resolutionPreset = document.getElementById("resolutionPreset");
+      const resolutionWidthInput = document.getElementById("resolutionWidthInput");
+      const resolutionHeightInput = document.getElementById("resolutionHeightInput");
+      const resolutionApplyButton = document.getElementById("resolutionApplyButton");
+      const resolutionReadButton = document.getElementById("resolutionReadButton");
+      const resolutionStatus = document.getElementById("resolutionStatus");
+      const runtime = window.radarRuntime;
+      const inputRef = new Map();
+      let state = readConfig();
+      let resolutionLimits = { minWidth: 900, minHeight: 620 };
+
+      const readResolutionSimState = () => {
+        try {
+          const raw = localStorage.getItem(RESOLUTION_SIM_STORAGE_KEY);
+          if (!raw) return { preset: "1920x1080", width: 1920, height: 1080 };
+          const parsed = JSON.parse(raw);
+          return {
+            preset: typeof parsed?.preset === "string" ? parsed.preset : "1920x1080",
+            width: Number(parsed?.width) || 1920,
+            height: Number(parsed?.height) || 1080,
+          };
+        } catch {
+          return { preset: "1920x1080", width: 1920, height: 1080 };
+        }
+      };
+
+      const writeResolutionSimState = (next) => {
+        try {
+          localStorage.setItem(RESOLUTION_SIM_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      };
+
+      const findPresetBySize = (width, height) =>
+        RESOLUTION_PRESETS.find(
+          (preset) =>
+            preset.key !== "custom" && preset.width === Number(width) && preset.height === Number(height)
+        ) || null;
+
+      const clampResolution = (width, height) => ({
+        width: Math.max(resolutionLimits.minWidth, Math.min(Math.round(Number(width) || 0), 7680)),
+        height: Math.max(resolutionLimits.minHeight, Math.min(Math.round(Number(height) || 0), 4320)),
+      });
+
+      let resolutionState = (() => {
+        const loaded = readResolutionSimState();
+        const clamped = clampResolution(loaded.width, loaded.height);
+        const preset = findPresetBySize(clamped.width, clamped.height)?.key || "custom";
+        return { preset, width: clamped.width, height: clamped.height };
+      })();
+
+      const syncResolutionInputs = () => {
+        if (resolutionPreset) {
+          resolutionPreset.value = resolutionState.preset;
+        }
+        if (resolutionWidthInput) {
+          resolutionWidthInput.value = String(resolutionState.width);
+          resolutionWidthInput.min = String(resolutionLimits.minWidth);
+        }
+        if (resolutionHeightInput) {
+          resolutionHeightInput.value = String(resolutionState.height);
+          resolutionHeightInput.min = String(resolutionLimits.minHeight);
+        }
+      };
+
+      const renderResolutionStatus = (message) => {
+        if (!resolutionStatus) return;
+        resolutionStatus.textContent = message;
+      };
+
+      const setResolutionState = (next, statusMessage) => {
+        const clamped = clampResolution(next.width, next.height);
+        const preset = next.preset === "custom"
+          ? "custom"
+          : findPresetBySize(clamped.width, clamped.height)?.key || "custom";
+        resolutionState = {
+          preset,
+          width: clamped.width,
+          height: clamped.height,
+        };
+        writeResolutionSimState(resolutionState);
+        syncResolutionInputs();
+        if (statusMessage) {
+          renderResolutionStatus(statusMessage);
+        }
+      };
+
+      const applyResolutionToMainWindow = async (width, height) => {
+        if (typeof runtime?.setMainWindowSize !== "function") {
+          renderResolutionStatus("해상도 시뮬레이터는 Electron 환경에서만 동작합니다.");
+          return;
+        }
+        try {
+          const request = clampResolution(width, height);
+          const result = await runtime.setMainWindowSize(request);
+          if (!result || !result.ok || !result.bounds) {
+            renderResolutionStatus("해상도 적용에 실패했습니다.");
+            return;
+          }
+
+          const nextWidth = Number(result.bounds.width) || request.width;
+          const nextHeight = Number(result.bounds.height) || request.height;
+          const matchedPreset = findPresetBySize(nextWidth, nextHeight);
+          setResolutionState(
+            {
+              preset: matchedPreset ? matchedPreset.key : "custom",
+              width: nextWidth,
+              height: nextHeight,
+            },
+            `메인 창 해상도 적용: ${nextWidth} x ${nextHeight}`
+          );
+        } catch {
+          renderResolutionStatus("해상도 적용 중 오류가 발생했습니다.");
+        }
+      };
+
+      const refreshMainWindowResolution = async () => {
+        if (typeof runtime?.getMainWindowBounds !== "function") {
+          renderResolutionStatus("메인 창 해상도 조회를 지원하지 않는 환경입니다.");
+          return;
+        }
+        try {
+          const result = await runtime.getMainWindowBounds();
+          if (!result || !result.ok || !result.bounds) {
+            renderResolutionStatus("메인 창 해상도 조회에 실패했습니다.");
+            return;
+          }
+
+          const minWidth = Number(result.minWidth);
+          const minHeight = Number(result.minHeight);
+          resolutionLimits = {
+            minWidth: Number.isFinite(minWidth)
+              ? Math.max(640, Math.round(minWidth))
+              : resolutionLimits.minWidth,
+            minHeight: Number.isFinite(minHeight)
+              ? Math.max(480, Math.round(minHeight))
+              : resolutionLimits.minHeight,
+          };
+
+          const currentWidth = Number(result.bounds.width) || resolutionState.width;
+          const currentHeight = Number(result.bounds.height) || resolutionState.height;
+          const matchedPreset = findPresetBySize(currentWidth, currentHeight);
+          setResolutionState(
+            {
+              preset: matchedPreset ? matchedPreset.key : "custom",
+              width: currentWidth,
+              height: currentHeight,
+            },
+            `현재 메인 창 해상도: ${currentWidth} x ${currentHeight}`
+          );
+        } catch {
+          renderResolutionStatus("메인 창 해상도 조회 중 오류가 발생했습니다.");
+        }
+      };
+
+      const initResolutionPresets = () => {
+        if (!resolutionPreset) return;
+        resolutionPreset.innerHTML = "";
+        RESOLUTION_PRESETS.forEach((preset) => {
+          const option = document.createElement("option");
+          option.value = preset.key;
+          option.textContent = preset.label;
+          resolutionPreset.appendChild(option);
+        });
+      };
+
+      const readModelPath = () => {
+        try {
+          return localStorage.getItem(MODEL_PATH_KEY) || "";
+        } catch {
+          return "";
+        }
+      };
+
+      const writeModelPath = (value) => {
+        try {
+          localStorage.setItem(MODEL_PATH_KEY, value || "");
+        } catch {
+          // ignore
+        }
+      };
+
+      const renderModelPath = () => {
+        const current = readModelPath();
+        if (modelPathInput && modelPathInput.value !== current) {
+          modelPathInput.value = current;
+        }
+        if (modelPathStatus) {
+          modelPathStatus.textContent = current
+            ? `현재 적용 경로: ${current}`
+            : "현재 적용 경로: (미설정)";
+        }
+      };
+
+      const applyModelPath = async (value) => {
+        const nextPath = String(value || "").trim();
+        writeModelPath(nextPath);
+        if (typeof runtime?.updateConfig === "function") {
+          try {
+            await runtime.updateConfig({ modelPath: nextPath });
+          } catch {
+            // ignore runtime bridge error
+          }
+        }
+        renderModelPath();
+      };
+
+      const renderSnapshot = () => {
+        snapshot.textContent = JSON.stringify(state, null, 2);
+      };
+
+      const applyControlValues = () => {
+        FIELD_DEFS.forEach((field) => {
+          const pair = inputRef.get(field.key);
+          if (!pair) return;
+          pair.range.value = String(state[field.key]);
+          pair.number.value = String(state[field.key]);
+        });
+      };
+
+      const renderAll = () => {
+        applyControlValues();
+        renderSnapshot();
+      };
+
+      const updateState = (patch) => {
+        state = writeConfig({ ...state, ...patch });
+        renderAll();
+      };
+
+      const makeRow = (field) => {
+        const row = document.createElement("div");
+        row.className = "row";
+
+        const label = document.createElement("span");
+        label.className = "label";
+        label.textContent = field.label;
+
+        const range = document.createElement("input");
+        range.type = "range";
+        range.min = String(field.min);
+        range.max = String(field.max);
+        range.step = String(field.step);
+        range.value = String(state[field.key]);
+
+        const number = document.createElement("input");
+        number.type = "number";
+        number.min = String(field.min);
+        number.max = String(field.max);
+        number.step = String(field.step);
+        number.value = String(state[field.key]);
+
+        const onInput = (rawValue) => {
+          updateState({ [field.key]: Number(rawValue) });
+        };
+
+        range.addEventListener("input", (event) => onInput(event.target.value));
+        number.addEventListener("input", (event) => onInput(event.target.value));
+
+        row.append(label, range, number);
+        inputRef.set(field.key, { range, number });
+        return row;
+      };
+
+      FIELD_DEFS.forEach((field) => {
+        const section = document.getElementById(field.section);
+        if (!section) return;
+        section.appendChild(makeRow(field));
+      });
+
+      resetButton.addEventListener("click", () => {
+        state = writeConfig(DEFAULT_CONFIG);
+        renderAll();
+      });
+
+      closeButton.addEventListener("click", () => window.close());
+
+      if (modelApplyButton) {
+        modelApplyButton.addEventListener("click", () => {
+          applyModelPath(modelPathInput ? modelPathInput.value : "");
+        });
+      }
+
+      if (modelPathInput) {
+        modelPathInput.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          applyModelPath(modelPathInput.value);
+        });
+      }
+
+      if (modelBrowseButton) {
+        modelBrowseButton.addEventListener("click", async () => {
+          let selectedPath = "";
+          if (typeof runtime?.pickModelPath === "function") {
+            const result = await runtime.pickModelPath({
+              title: "모델 파일 또는 디렉터리 선택",
+              defaultPath: modelPathInput ? modelPathInput.value : "",
+            });
+            if (!result || result.canceled || !result.path) return;
+            selectedPath = String(result.path);
+          } else if (typeof runtime?.pickDirectory === "function") {
+            const result = await runtime.pickDirectory({
+              title: "모델 디렉터리 선택",
+              defaultPath: modelPathInput ? modelPathInput.value : "",
+            });
+            if (!result || result.canceled || !result.path) return;
+            selectedPath = String(result.path);
+          } else {
+            if (modelPathStatus) {
+              modelPathStatus.textContent =
+                "경로 탐색은 Electron 데스크톱 환경에서만 사용할 수 있습니다.";
+            }
+            return;
+          }
+
+          if (modelPathInput) {
+            modelPathInput.value = selectedPath;
+          }
+          await applyModelPath(selectedPath);
+        });
+      }
+
+      initResolutionPresets();
+      syncResolutionInputs();
+
+      if (resolutionPreset) {
+        resolutionPreset.addEventListener("change", (event) => {
+          const key = String(event.target.value || "custom");
+          const selected = RESOLUTION_PRESETS.find((preset) => preset.key === key);
+          if (!selected || key === "custom") {
+            setResolutionState(
+              {
+                ...resolutionState,
+                preset: "custom",
+              },
+              "사용자 지정 해상도를 입력한 뒤 적용하세요."
+            );
+            return;
+          }
+
+          setResolutionState(
+            {
+              preset: selected.key,
+              width: selected.width,
+              height: selected.height,
+            },
+            `프리셋 선택: ${selected.width} x ${selected.height} (적용 버튼으로 반영)`
+          );
+        });
+      }
+
+      const syncCustomResolutionFromInputs = () => {
+        setResolutionState(
+          {
+            preset: "custom",
+            width: resolutionWidthInput ? resolutionWidthInput.value : resolutionState.width,
+            height: resolutionHeightInput ? resolutionHeightInput.value : resolutionState.height,
+          },
+          null
+        );
+      };
+
+      if (resolutionWidthInput) {
+        resolutionWidthInput.addEventListener("input", syncCustomResolutionFromInputs);
+      }
+      if (resolutionHeightInput) {
+        resolutionHeightInput.addEventListener("input", syncCustomResolutionFromInputs);
+      }
+
+      if (resolutionApplyButton) {
+        resolutionApplyButton.addEventListener("click", () => {
+          applyResolutionToMainWindow(resolutionState.width, resolutionState.height);
+        });
+      }
+
+      if (resolutionReadButton) {
+        resolutionReadButton.addEventListener("click", () => {
+          refreshMainWindowResolution();
+        });
+      }
+
+      window.addEventListener("storage", (event) => {
+        if (event.key === STORAGE_KEY) {
+          state = readConfig();
+          renderAll();
+          return;
+        }
+        if (event.key === MODEL_PATH_KEY) {
+          renderModelPath();
+        }
+        if (event.key === RESOLUTION_SIM_STORAGE_KEY) {
+          const loaded = readResolutionSimState();
+          setResolutionState(loaded, null);
+        }
+      });
+
+      renderAll();
+      renderModelPath();
+      refreshMainWindowResolution();
+    </script>
+  </body>
+</html>

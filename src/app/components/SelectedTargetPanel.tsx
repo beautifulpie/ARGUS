@@ -1,8 +1,10 @@
 import { AlertTriangle, Box, Navigation, Target } from 'lucide-react';
 import { DetectedObject, ObjectClass, ObjectStatus, RiskLevel, UavDecision } from '../types';
+import { type LayoutDevConfig } from '../layoutDevConfig';
 
 interface SelectedTargetPanelProps {
   selectedObject: DetectedObject | null;
+  layoutDevConfig: LayoutDevConfig;
 }
 
 const CLASS_NAMES_KR: Record<ObjectClass, string> = {
@@ -56,10 +58,13 @@ const UAV_BADGE_CLASS: Record<UavDecision, string> = {
   UNKNOWN: 'argus-uav-unknown',
 };
 
-export function SelectedTargetPanel({ selectedObject }: SelectedTargetPanelProps) {
+export function SelectedTargetPanel({ selectedObject, layoutDevConfig }: SelectedTargetPanelProps) {
   if (!selectedObject) {
     return (
-      <div className="argus-aircraft-panel argus-surface h-full border-b border-cyan-950/50 flex items-center justify-center">
+      <div
+        className="argus-aircraft-panel argus-surface h-full border-b border-cyan-950/50 flex items-center justify-center"
+        style={{ ['--argus-selected-font-scale' as string]: String(layoutDevConfig.selectedPanelFontScale) }}
+      >
         <div className="text-center px-6">
           <Target className="w-14 h-14 text-cyan-900/40 mx-auto mb-3" />
           <p className="text-lg font-semibold text-slate-300">선택된 객체 없음</p>
@@ -79,7 +84,10 @@ export function SelectedTargetPanel({ selectedObject }: SelectedTargetPanelProps
   const confidence = Math.max(0, Math.min(100, selectedObject.confidence));
 
   return (
-    <section className="argus-aircraft-panel argus-surface h-full border-b border-cyan-950/50 overflow-hidden">
+    <section
+      className="argus-aircraft-panel argus-surface h-full border-b border-cyan-950/50 overflow-hidden"
+      style={{ ['--argus-selected-font-scale' as string]: String(layoutDevConfig.selectedPanelFontScale) }}
+    >
       <div className="argus-aircraft-body">
         {/* Hierarchy: threat > class/confidence > motion > details */}
         <header className="argus-aircraft-header">

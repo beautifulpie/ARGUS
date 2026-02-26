@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from 'react';
 import { DetectedObject, ObjectClass } from '../types';
-import { encodeMgrsFromLatLon, extract100kIdFromMgrs } from '../lib/mgrsLocal';
+import { encodeMgrsFromLatLon, extract100kIdFromMgrs, extractSixDigitFromMgrs } from '../lib/mgrsLocal';
+import { type LayoutDevConfig } from '../layoutDevConfig';
 
 interface LidarSpatialViewProps {
   objects: DetectedObject[];
@@ -14,6 +15,7 @@ interface LidarSpatialViewProps {
   showMgrsLabels: boolean;
   mapDataPath: string;
   mapDataLoadNonce: number;
+  layoutDevConfig: LayoutDevConfig;
 }
 
 type TrackTone = 'SAFE' | 'UNKNOWN' | 'SUSPICIOUS' | 'THREAT';
@@ -69,7 +71,7 @@ interface AdminLabelLayers {
   emd: GeoLabel[];
 }
 
-type UtmGridSpacing = 1000 | 10000;
+type UtmGridSpacing = 1000 | 10000 | 100000;
 
 interface UtmGridLine {
   points: GeoPoint[];
@@ -89,6 +91,7 @@ interface UtmGridData {
   zoom: number;
   majorLines: UtmGridLine[];
   minorLines: UtmGridLine[];
+  mgrsBoundaryLines: UtmGridLine[];
   mgrs100kmLabels: Mgrs100kmLabel[];
   viewportSignature: string;
 }
@@ -96,6 +99,7 @@ interface UtmGridData {
 interface Mgrs100kmLabel {
   id: string;
   label: string;
+  sixDigit: string;
   point: GeoPoint;
 }
 
@@ -129,14 +133,20 @@ interface RadarRuntimeBridge {
 interface UtmGridThemeStyle {
   majorLineColor: string;
   minorLineColor: string;
+  mgrsBoundaryLineColor: string;
   majorLineWidth: number;
   minorLineWidth: number;
+  mgrsBoundaryLineWidth: number;
   majorLineDash: number[];
   minorLineDash: number[];
+  mgrsBoundaryLineDash: number[];
   mgrsLabelFill: string;
   mgrsLabelStroke: string;
+  mgrsCoordFill: string;
+  mgrsCoordStroke: string;
   mgrsLabelFontSize: number;
   mgrsLabelFontSizeZoomed: number;
+  mgrsCoordFontSize: number;
   mgrsLabelLetterSpacing: number;
 }
 
@@ -186,7 +196,8 @@ const UTM_GRID_MAX_MINOR_LINE_COUNT = 900;
 const UTM_GRID_MAJOR_STEP_METERS = 10_000;
 const UTM_GRID_MINOR_STEP_METERS = 1_000;
 const UTM_GRID_MGRS_STEP_METERS = 100_000;
-const UTM_GRID_MGRS_MIN_LABEL_DISTANCE_PX = 120;
+const UTM_GRID_MGRS_LABEL_ANCHOR_EASTING_METERS = 12_000;
+const UTM_GRID_MGRS_LABEL_ANCHOR_NORTHING_METERS = 12_000;
 const UTM_ZONE_HYSTERESIS_MIN_LON = 125.7;
 const UTM_ZONE_HYSTERESIS_MAX_LON = 126.3;
 const UTM_GRID_MGRS_CACHE_MAX = 96;
@@ -196,27 +207,39 @@ const UTM_GRID_THEME_STYLE: Record<'DARK' | 'LIGHT', UtmGridThemeStyle> = {
   LIGHT: {
     majorLineColor: 'rgba(60, 90, 120, 0.18)',
     minorLineColor: 'rgba(60, 90, 120, 0.08)',
+    mgrsBoundaryLineColor: 'rgba(45, 72, 96, 0.48)',
     majorLineWidth: 1.4,
     minorLineWidth: 1,
+    mgrsBoundaryLineWidth: 1.9,
     majorLineDash: [7, 6],
     minorLineDash: [3, 7],
-    mgrsLabelFill: 'rgba(60, 90, 120, 0.22)',
-    mgrsLabelStroke: 'rgba(255, 255, 255, 0.25)',
-    mgrsLabelFontSize: 12,
-    mgrsLabelFontSizeZoomed: 14,
+    mgrsBoundaryLineDash: [10, 8],
+    mgrsLabelFill: 'rgba(32, 58, 82, 0.74)',
+    mgrsLabelStroke: 'rgba(255, 255, 255, 0.86)',
+    mgrsCoordFill: 'rgba(26, 50, 74, 0.7)',
+    mgrsCoordStroke: 'rgba(255, 255, 255, 0.8)',
+    mgrsLabelFontSize: 34,
+    mgrsLabelFontSizeZoomed: 41,
+    mgrsCoordFontSize: 31,
     mgrsLabelLetterSpacing: 0.5,
   },
   DARK: {
     majorLineColor: 'rgba(120, 180, 220, 0.22)',
     minorLineColor: 'rgba(120, 180, 220, 0.10)',
+    mgrsBoundaryLineColor: 'rgba(125, 190, 232, 0.48)',
     majorLineWidth: 1.4,
     minorLineWidth: 1,
+    mgrsBoundaryLineWidth: 1.9,
     majorLineDash: [7, 6],
     minorLineDash: [3, 7],
-    mgrsLabelFill: 'rgba(120, 180, 220, 0.24)',
-    mgrsLabelStroke: 'rgba(0, 0, 0, 0.30)',
-    mgrsLabelFontSize: 12,
-    mgrsLabelFontSizeZoomed: 14,
+    mgrsBoundaryLineDash: [10, 8],
+    mgrsLabelFill: 'rgba(166, 220, 250, 0.7)',
+    mgrsLabelStroke: 'rgba(0, 0, 0, 0.72)',
+    mgrsCoordFill: 'rgba(166, 220, 250, 0.62)',
+    mgrsCoordStroke: 'rgba(0, 0, 0, 0.7)',
+    mgrsLabelFontSize: 34,
+    mgrsLabelFontSizeZoomed: 41,
+    mgrsCoordFontSize: 31,
     mgrsLabelLetterSpacing: 0.5,
   },
 };
@@ -569,11 +592,20 @@ const createMgrs100kmLabels = (
 ): Mgrs100kmLabel[] => {
   if (zoom < 8) return [];
 
-  const { minEasting, maxEasting, minNorthing, maxNorthing } = getUtmBoundsFromViewport(zone, bounds, 0);
-  const e0 = Math.floor(minEasting / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
-  const e1 = Math.ceil(maxEasting / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
-  const n0 = Math.floor(minNorthing / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
-  const n1 = Math.ceil(maxNorthing / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
+  const {
+    minEasting: viewportMinEasting,
+    maxEasting: viewportMaxEasting,
+    minNorthing: viewportMinNorthing,
+    maxNorthing: viewportMaxNorthing,
+  } = getUtmBoundsFromViewport(zone, bounds, 0);
+  const e0 =
+    Math.floor(viewportMinEasting / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
+  const e1 =
+    Math.ceil(viewportMaxEasting / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
+  const n0 =
+    Math.floor(viewportMinNorthing / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
+  const n1 =
+    Math.ceil(viewportMaxNorthing / UTM_GRID_MGRS_STEP_METERS) * UTM_GRID_MGRS_STEP_METERS;
   const zoomBucket = zoom >= 12 ? 12 : 8;
   const cacheKey = `${zone}:${zoomBucket}:${e0}:${e1}:${n0}:${n1}`;
   const cached = utmMgrsLabelCache.get(cacheKey);
@@ -594,11 +626,40 @@ const createMgrs100kmLabels = (
       );
       const label = extract100kIdFromMgrs(mgrsString);
       if (!label) continue;
+      const mgrs6String = encodeMgrsFromLatLon(
+        centerPoint.lat,
+        centerPoint.lon,
+        (lat, lon, zoneNumber) => toUtmCoordinates(lat, lon, zoneNumber as 51 | 52),
+        zone,
+        3
+      );
+      const sixDigit = extractSixDigitFromMgrs(mgrs6String);
+
+      const cellMinEasting = easting;
+      const cellMaxEasting = easting + UTM_GRID_MGRS_STEP_METERS;
+      const cellMinNorthing = northing;
+      const cellMaxNorthing = northing + UTM_GRID_MGRS_STEP_METERS;
+      const intersectMinEasting = Math.max(viewportMinEasting, cellMinEasting);
+      const intersectMaxEasting = Math.min(viewportMaxEasting, cellMaxEasting);
+      const intersectMinNorthing = Math.max(viewportMinNorthing, cellMinNorthing);
+      const intersectMaxNorthing = Math.min(viewportMaxNorthing, cellMaxNorthing);
+      const hasIntersection =
+        intersectMinEasting <= intersectMaxEasting &&
+        intersectMinNorthing <= intersectMaxNorthing;
+      if (!hasIntersection) continue;
+
+      // Fixed anchor per 100km cell (left-bottom offset) for stable, non-jumping label placement.
+      const fixedAnchorEasting = cellMinEasting + UTM_GRID_MGRS_LABEL_ANCHOR_EASTING_METERS;
+      const fixedAnchorNorthing = cellMinNorthing + UTM_GRID_MGRS_LABEL_ANCHOR_NORTHING_METERS;
+      const anchorEasting = fixedAnchorEasting;
+      const anchorNorthing = fixedAnchorNorthing;
+      const anchorPoint = toLatLonFromUtm(anchorEasting, anchorNorthing, zone);
 
       labels.push({
         id: `${zone}:${easting}:${northing}:${label}`,
         label,
-        point: centerPoint,
+        sixDigit,
+        point: anchorPoint,
       });
     }
   }
@@ -619,6 +680,7 @@ const createEmptyUtmGridData = (zone: 51 | 52, zoom: number): UtmGridData => ({
   zoom,
   majorLines: [],
   minorLines: [],
+  mgrsBoundaryLines: [],
   mgrs100kmLabels: [],
   viewportSignature: `${UTM_GRID_LAYER_SIGNATURE}:${zone}:${zoom}:none`,
 });
@@ -689,6 +751,10 @@ const buildUtmGridDataForViewport = (
     : [];
   const shouldRenderMinor = shouldRenderLines && zoom >= 11;
   const minorLines = shouldRenderMinor ? createUtmGridLines(zone, bounds, UTM_GRID_MINOR_STEP_METERS) : [];
+  const shouldRenderMgrsBoundaries = (showUtmGrid || showMgrsLabels) && zoom >= 8;
+  const mgrsBoundaryLines = shouldRenderMgrsBoundaries
+    ? createUtmGridLines(zone, bounds, UTM_GRID_MGRS_STEP_METERS)
+    : [];
   const mgrs100kmLabels = shouldRenderMgrsLabels ? createMgrs100kmLabels(zone, bounds, zoom) : [];
 
   return {
@@ -697,6 +763,7 @@ const buildUtmGridDataForViewport = (
     zoom,
     majorLines,
     minorLines,
+    mgrsBoundaryLines,
     mgrs100kmLabels,
     viewportSignature: [
       UTM_GRID_LAYER_SIGNATURE,
@@ -709,6 +776,7 @@ const buildUtmGridDataForViewport = (
       bounds.maxLon.toFixed(4),
       majorLines.length,
       minorLines.length,
+      mgrsBoundaryLines.length,
       mgrs100kmLabels.length,
       mgrs100kmLabels[0]?.id ?? 'none',
       mgrs100kmLabels[mgrs100kmLabels.length - 1]?.id ?? 'none',
@@ -1038,6 +1106,7 @@ export function LidarSpatialView({
   showMgrsLabels,
   mapDataPath,
   mapDataLoadNonce,
+  layoutDevConfig,
 }: LidarSpatialViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -1570,66 +1639,81 @@ export function LidarSpatialView({
         });
       }
 
+      const shouldDrawMgrsBoundaries = mapZoom >= 8 && utmGridData.mgrsBoundaryLines.length > 0;
+      if (shouldDrawMgrsBoundaries) {
+        utmGridData.mgrsBoundaryLines.forEach((line) => {
+          drawGeoPolyline(
+            line.points,
+            utmGridStyle.mgrsBoundaryLineColor,
+            utmGridStyle.mgrsBoundaryLineWidth,
+            utmGridStyle.mgrsBoundaryLineDash,
+            1
+          );
+        });
+      }
+
       if (showMgrsLabels && mapZoom >= 8 && utmGridData.mgrs100kmLabels.length > 0) {
-        const placedMgrsLabels: Array<{ x: number; y: number }> = [];
         const mgrsFontSize =
           mapZoom >= 12 ? utmGridStyle.mgrsLabelFontSizeZoomed : utmGridStyle.mgrsLabelFontSize;
-        const drawSpacedLabel = (
-          text: string,
-          x: number,
-          y: number,
-          spacing: number
-        ) => {
+        const mgrsCoordFontSize = utmGridStyle.mgrsCoordFontSize;
+        const showSixDigitCoords = mapZoom >= 12;
+        const drawSpacedLabelLeft = (text: string, x: number, y: number, spacing: number) => {
           const chars = Array.from(text);
           if (chars.length === 0) return;
-          const charWidths = chars.map((char) => ctx.measureText(char).width);
-          const totalWidth =
-            charWidths.reduce((sum, widthValue) => sum + widthValue, 0) +
-            spacing * Math.max(0, chars.length - 1);
-          let cursorX = x - totalWidth / 2;
-
-          chars.forEach((char, index) => {
-            const charWidth = charWidths[index];
-            const charCenterX = cursorX + charWidth / 2;
-            ctx.strokeText(char, charCenterX, y);
-            ctx.fillText(char, charCenterX, y);
-            cursorX += charWidth + spacing;
+          let cursorX = x;
+          chars.forEach((char) => {
+            ctx.strokeText(char, cursorX, y);
+            ctx.fillText(char, cursorX, y);
+            cursorX += ctx.measureText(char).width + spacing;
           });
         };
 
         ctx.save();
         ctx.font = `600 ${mgrsFontSize}px ${monoCanvasFont}`;
-        ctx.textAlign = 'center';
+        ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1.2;
         ctx.strokeStyle = utmGridStyle.mgrsLabelStroke;
         ctx.fillStyle = utmGridStyle.mgrsLabelFill;
 
         utmGridData.mgrs100kmLabels.forEach((label) => {
           const canvasPoint = toCanvasPointFromGeo(label.point.lat, label.point.lon);
+          const estimatedMainWidth = mgrsFontSize * 2.4;
+          const leftMargin = 8;
+          const rightMargin = estimatedMainWidth + 12;
+          const topMargin = showSixDigitCoords ? mgrsFontSize * 0.7 : mgrsFontSize * 0.55;
+          const bottomMargin = showSixDigitCoords
+            ? mgrsFontSize + mgrsCoordFontSize + 10
+            : mgrsFontSize * 0.55;
           if (
-            canvasPoint.x < 10 ||
-            canvasPoint.x > width - 10 ||
-            canvasPoint.y < 10 ||
-            canvasPoint.y > height - 10
+            canvasPoint.x < leftMargin ||
+            canvasPoint.x > width - rightMargin ||
+            canvasPoint.y < topMargin ||
+            canvasPoint.y > height - bottomMargin
           ) {
             return;
           }
-
-          const hasOverlap = placedMgrsLabels.some(
-            (placed) =>
-              Math.hypot(placed.x - canvasPoint.x, placed.y - canvasPoint.y) <
-              UTM_GRID_MGRS_MIN_LABEL_DISTANCE_PX
-          );
-          if (hasOverlap) return;
-
-          placedMgrsLabels.push(canvasPoint);
-          drawSpacedLabel(
+          const mainLabelY = showSixDigitCoords ? canvasPoint.y - mgrsFontSize * 0.34 : canvasPoint.y;
+          drawSpacedLabelLeft(
             label.label,
             canvasPoint.x,
-            canvasPoint.y,
+            mainLabelY,
             utmGridStyle.mgrsLabelLetterSpacing
           );
+
+          if (showSixDigitCoords && label.sixDigit) {
+            ctx.font = `500 ${mgrsCoordFontSize}px ${monoCanvasFont}`;
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = utmGridStyle.mgrsCoordStroke;
+            ctx.fillStyle = utmGridStyle.mgrsCoordFill;
+            const coordY = mainLabelY + mgrsFontSize * 0.82;
+            ctx.strokeText(label.sixDigit, canvasPoint.x, coordY);
+            ctx.fillText(label.sixDigit, canvasPoint.x, coordY);
+            ctx.font = `600 ${mgrsFontSize}px ${monoCanvasFont}`;
+            ctx.lineWidth = 1.2;
+            ctx.strokeStyle = utmGridStyle.mgrsLabelStroke;
+            ctx.fillStyle = utmGridStyle.mgrsLabelFill;
+          }
         });
         ctx.restore();
       }
@@ -2316,29 +2400,38 @@ export function LidarSpatialView({
     viewCenterRef.current = mapCenter;
     setMapViewCenter(mapCenter);
   };
+  const mapUiFontScale = layoutDevConfig.mapFontScale;
+  const scaledMapPx = (base: number) => `${(base * mapUiFontScale).toFixed(1)}px`;
+  const scaledMapRem = (base: number) => `${(base * mapUiFontScale).toFixed(3)}rem`;
 
   return (
-    <div className="argus-surface h-full w-full bg-[#0b1016] border-r border-cyan-950/50 flex flex-col relative">
-      {/* Corner brackets */}
-      <div className="absolute top-4 left-4 w-6 h-6 border-l-2 border-t-2 border-cyan-500/40" />
-      <div className="absolute top-4 right-4 w-6 h-6 border-r-2 border-t-2 border-cyan-500/40" />
-      <div className="absolute bottom-4 left-4 w-6 h-6 border-l-2 border-b-2 border-cyan-500/40" />
-      <div className="absolute bottom-4 right-4 w-6 h-6 border-r-2 border-b-2 border-cyan-500/40" />
-
+    <div
+      className="argus-map-panel argus-surface h-full w-full bg-[#0b1016] border-r border-cyan-950/50 flex flex-col relative"
+      style={{ ['--argus-map-font-scale' as string]: String(layoutDevConfig.mapFontScale) }}
+    >
       {/* Header */}
-      <div className="argus-map-header px-6 py-4 border-b border-cyan-950/50">
+      <div
+        className="argus-map-header px-6 border-b border-cyan-950/50"
+        style={{
+          paddingTop: `${layoutDevConfig.mapHeaderPaddingY}px`,
+          paddingBottom: `${layoutDevConfig.mapHeaderPaddingY}px`,
+        }}
+      >
         <div>
-          <h2 className="text-2xl font-bold text-cyan-300 uppercase tracking-[0.08em]">
+          <h2
+            className="argus-map-title text-2xl font-bold text-cyan-300 uppercase tracking-[0.08em]"
+            style={{ fontSize: scaledMapRem(1.5) }}
+          >
             국지 방공 레이더 데이터 시각화
           </h2>
-          <p className="text-sm text-slate-500 mt-1">
+          <p className="argus-map-subtitle text-sm text-slate-500 mt-1" style={{ fontSize: scaledMapPx(14) }}>
             전술 {mapTheme === 'DARK' ? '다크' : '화이트'} 맵 · 공식 경계/영공/영해 오버레이
             {showUtmGrid ? ` · UTM Grid Z${utmGridData.zone}N (EPSG:${utmGridData.epsg})` : ''}
-            {showMgrsLabels ? ' · MGRS 100km 라벨' : ''}
+            {showMgrsLabels ? ' · MGRS 100km/6자리 좌표' : ''}
           </p>
         </div>
         <div className="mt-2 flex items-start justify-between gap-2">
-          <p className="text-xs text-slate-400 break-all">
+          <p className="argus-map-meta text-xs text-slate-400 break-all" style={{ fontSize: scaledMapPx(12) }}>
             진지(동심원) 좌표 {mapCenter.lat.toFixed(6)}, {mapCenter.lon.toFixed(6)}
             {' · '}지도 중심 {mapViewCenter.lat.toFixed(6)}, {mapViewCenter.lon.toFixed(6)} · 줌 {mapZoom}
             {' · '}
@@ -2347,21 +2440,22 @@ export function LidarSpatialView({
           <button
             type="button"
             onClick={handleRecenterToSite}
-            className={`shrink-0 h-9 min-w-[74px] rounded border px-4 text-sm font-semibold whitespace-nowrap transition-colors ${
+            className={`argus-map-recenter-button shrink-0 h-9 min-w-[74px] rounded border px-4 text-sm font-semibold whitespace-nowrap transition-colors ${
               mapTheme === 'LIGHT'
                 ? 'border-slate-400 bg-white text-slate-800 hover:bg-slate-100'
                 : 'border-cyan-700/70 bg-[#0b1822] text-cyan-200 hover:bg-[#132537]'
             }`}
+            style={{ fontSize: scaledMapPx(14) }}
           >
             현 위치
           </button>
         </div>
-        <p className={`map-data-status mt-1 text-[11px] ${officialDataLoaded ? 'is-loaded' : 'is-warning'}`}>
+        <p className={`argus-map-data-status map-data-status mt-1 text-[11px] ${officialDataLoaded ? 'is-loaded' : 'is-warning'}`} style={{ fontSize: scaledMapPx(11) }}>
           지도 데이터: {officialSourceLabel}
           {!officialDataLoaded && ' · 설정에서 지정한 경로에 공식 GeoJSON을 추가하면 자동 반영됩니다.'}
         </p>
         {officialDataLoaded && officialEmdLabels.length === 0 && (
-          <p className="map-data-status is-warning mt-1 text-[11px]">
+          <p className="argus-map-data-status map-data-status is-warning mt-1 text-[11px]" style={{ fontSize: scaledMapPx(11) }}>
             읍·면·동 라벨용 공식 데이터(emd_labels.geojson)가 없어 현재 시/도 라벨만 표시됩니다.
           </p>
         )}
@@ -2386,7 +2480,13 @@ export function LidarSpatialView({
       </div>
 
       {/* Legend */}
-      <div className="argus-map-legend px-6 py-3 border-t border-cyan-950/50 bg-[#0d131b] text-sm">
+      <div
+        className="argus-map-legend px-6 border-t border-cyan-950/50 bg-[#0d131b] text-sm"
+        style={{
+          paddingTop: `${layoutDevConfig.mapLegendPaddingY}px`,
+          paddingBottom: `${layoutDevConfig.mapLegendPaddingY}px`,
+        }}
+      >
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className="text-cyan-300 text-xs font-semibold uppercase tracking-[0.1em] mr-1 whitespace-nowrap">
             표적 위험 분류
@@ -2410,17 +2510,11 @@ export function LidarSpatialView({
         </div>
         <div className="mt-2 flex items-center justify-between gap-3 text-xs">
           <div className="flex min-w-0 items-center gap-3">
-            <div
-              className={`flex h-10 items-center rounded border px-2 ${
-                mapTheme === 'LIGHT'
-                  ? 'border-slate-300/90 bg-white'
-                  : 'border-cyan-900/60 bg-[#0a1119]'
-              }`}
-            >
+            <div className="flex h-10 items-center px-0 border-0 bg-transparent shadow-none">
               <img
                 src="/a-center.webp"
                 alt="육군 인공지능센터 로고"
-                className="h-7 w-auto object-contain"
+                className="h-7 w-auto object-contain bg-transparent"
                 loading="lazy"
               />
             </div>

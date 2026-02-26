@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { DetectedObject } from '../types';
+import { type LayoutDevConfig } from '../layoutDevConfig';
 
 interface ObjectListTableProps {
   objects: DetectedObject[];
   selectedObjectId: string | null;
   onSelectObject: (id: string) => void;
+  layoutDevConfig: LayoutDevConfig;
 }
 
 type SortField =
@@ -73,10 +75,18 @@ const getAdaptiveFontClass = (value: string, compactAt = 11, tightAt = 17): stri
   return 'text-[13px]';
 };
 
-export function ObjectListTable({ objects, selectedObjectId, onSelectObject }: ObjectListTableProps) {
+export function ObjectListTable({
+  objects,
+  selectedObjectId,
+  onSelectObject,
+  layoutDevConfig,
+}: ObjectListTableProps) {
   const [sortField, setSortField] = useState<SortField>('riskLevel');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const expandedWindowRef = useRef<Window | null>(null);
+  const tableScale = layoutDevConfig.tableFontScale;
+  const scaledPx = (base: number) => `${(base * tableScale).toFixed(1)}px`;
+  const scaledRem = (base: number) => `${(base * tableScale).toFixed(3)}rem`;
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -707,16 +717,19 @@ export function ObjectListTable({ objects, selectedObjectId, onSelectObject }: O
   }, []);
 
   return (
-    <div className="argus-surface h-full bg-[#0b1016] border-b border-cyan-950/50 flex flex-col relative overflow-hidden">
-      <div className="absolute top-4 left-6 w-4 h-4 border-l-2 border-t-2 border-cyan-500/35 z-10" />
-      <div className="absolute top-4 right-6 w-4 h-4 border-r-2 border-t-2 border-cyan-500/35 z-10" />
-
+    <div
+      className="argus-object-table argus-surface h-full bg-[#0b1016] border-b border-cyan-950/50 flex flex-col relative overflow-hidden"
+      style={{ ['--argus-table-font-scale' as string]: String(layoutDevConfig.tableFontScale) }}
+    >
       <div className="argus-section-header px-6 py-4 border-b border-cyan-950/50 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
-          <h2 className="text-2xl font-bold text-cyan-300 uppercase tracking-[0.08em] whitespace-nowrap">
+          <h2
+            className="argus-object-table-title text-2xl font-bold text-cyan-300 uppercase tracking-[0.08em] whitespace-nowrap"
+            style={{ fontSize: scaledRem(1.5) }}
+          >
             추적된 객체
           </h2>
-          <span className="inline-flex items-center rounded border border-cyan-700/60 bg-cyan-950/30 px-2.5 py-1 text-sm font-semibold text-cyan-200 tabular-nums whitespace-nowrap">
+          <span className="argus-object-table-count inline-flex items-center rounded border border-cyan-700/60 bg-cyan-950/30 px-2.5 py-1 text-sm font-semibold text-cyan-200 tabular-nums whitespace-nowrap" style={{ fontSize: scaledPx(14) }}>
             {objects.length} 활성
           </span>
         </div>
@@ -724,13 +737,14 @@ export function ObjectListTable({ objects, selectedObjectId, onSelectObject }: O
           type="button"
           onClick={openExpandedWindow}
           className="argus-expand-view-button h-9 shrink-0 rounded border border-cyan-700/70 bg-[#0b1822] px-3 text-sm font-semibold text-cyan-200 hover:bg-[#132537] transition-colors"
+          style={{ fontSize: scaledPx(14) }}
         >
           확장 보기
         </button>
       </div>
 
       <div className="flex-1 overflow-auto">
-        <table className="argus-data-table w-full table-fixed text-[13px] leading-[1.35]">
+          <table className="argus-data-table w-full table-fixed text-[13px] leading-[1.35]" style={{ fontSize: scaledPx(13) }}>
           <colgroup>
             <col style={{ width: '10%' }} />
             <col style={{ width: '18%' }} />
@@ -743,7 +757,7 @@ export function ObjectListTable({ objects, selectedObjectId, onSelectObject }: O
             <col style={{ width: '7%' }} />
           </colgroup>
           <thead className="sticky top-0 z-10 bg-[#0f161f]/95 backdrop-blur border-b border-slate-700/70">
-            <tr className="text-slate-400 uppercase tracking-[0.08em]">
+            <tr className="text-slate-400 uppercase tracking-[0.08em]" style={{ fontSize: scaledPx(13) }}>
               <th className="px-4 py-3.5 text-left font-semibold whitespace-nowrap">
                 <button
                   onClick={() => handleSort('riskLevel')}
@@ -911,7 +925,7 @@ export function ObjectListTable({ objects, selectedObjectId, onSelectObject }: O
 
         {objects.length === 0 && (
           <div className="flex items-center justify-center h-36">
-            <p className="text-base text-slate-500">감지된 객체 없음</p>
+            <p className="text-base text-slate-500" style={{ fontSize: scaledRem(1) }}>감지된 객체 없음</p>
           </div>
         )}
       </div>

@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ARGUS Event Log Viewer</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --surface: #101722;
+        --surface-2: #0f1724;
+        --border: #1f2a3a;
+        --text: #e2ebf5;
+        --text-muted: #91a0b6;
+        --accent: #35c9e8;
+        --warn: #f59e0b;
+        --alert: #ef4444;
+      }
+
+      @font-face {
+        font-family: 'ARGUS Korean';
+        src: url('./fonts/NotoSansCJKkr-Regular.otf') format('opentype');
+        font-weight: 400;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'ARGUS Korean';
+        src: url('./fonts/NotoSansCJKkr-Bold.otf') format('opentype');
+        font-weight: 700;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'ARGUS Korean', 'Noto Sans CJK KR', 'Malgun Gothic', 'Segoe UI', sans-serif;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      .app {
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        gap: 10px;
+        padding: 14px;
+      }
+
+      .panel {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        border-radius: 10px;
+      }
+
+      .header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.1;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+      }
+
+      .subtitle {
+        margin: 4px 0 0;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+      }
+
+      .label {
+        font-size: 12px;
+        color: var(--text-muted);
+        letter-spacing: 0.04em;
+      }
+
+      select,
+      button {
+        height: 34px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text);
+        padding: 0 10px;
+        font-size: 13px;
+        white-space: nowrap;
+        font-family: 'ARGUS Korean', 'Noto Sans CJK KR', 'Malgun Gothic', 'Segoe UI', sans-serif;
+      }
+
+      select {
+        min-width: 280px;
+      }
+
+      button {
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      #refresh-btn,
+      #open-btn {
+        min-width: 102px;
+        font-size: 12px;
+        letter-spacing: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      button:hover {
+        background: #152033;
+      }
+
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      .status {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--text-muted);
+        white-space: nowrap;
+      }
+
+      .summary {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 0 16px 12px;
+      }
+
+      .summary-card {
+        min-width: 140px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #0d1522;
+        padding: 8px 10px;
+      }
+
+      .summary-label {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin: 0;
+      }
+
+      .summary-value {
+        margin: 2px 0 0;
+        font-size: 22px;
+        font-weight: 800;
+        line-height: 1.1;
+        font-family: 'JetBrains Mono', 'Consolas', monospace;
+      }
+
+      .summary-value.alert {
+        color: #fca5a5;
+      }
+
+      .summary-value.warn {
+        color: #fcd34d;
+      }
+
+      .table-wrap {
+        min-height: 0;
+        overflow: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        font-size: 13px;
+      }
+
+      thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #0f1825;
+        color: #b8c6d8;
+        text-align: left;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        border-bottom: 1px solid var(--border);
+        padding: 9px 10px;
+      }
+
+      tbody td {
+        border-bottom: 1px solid rgba(31, 42, 58, 0.8);
+        padding: 9px 10px;
+        color: var(--text);
+        vertical-align: top;
+        overflow-wrap: anywhere;
+      }
+
+      tbody tr:nth-child(2n) td {
+        background: rgba(13, 21, 34, 0.45);
+      }
+
+      .mono {
+        font-family: 'JetBrains Mono', 'Consolas', monospace;
+      }
+
+      .type-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 74px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        font-size: 10px;
+        line-height: 1;
+        white-space: nowrap;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      tbody td:nth-child(2) {
+        white-space: nowrap;
+        overflow-wrap: normal;
+      }
+
+      .type-info {
+        color: #9fdcf4;
+        border-color: rgba(53, 201, 232, 0.5);
+        background: rgba(53, 201, 232, 0.12);
+      }
+
+      .type-warning {
+        color: #fbd38d;
+        border-color: rgba(245, 158, 11, 0.6);
+        background: rgba(245, 158, 11, 0.14);
+      }
+
+      .type-alert {
+        color: #fecaca;
+        border-color: rgba(239, 68, 68, 0.65);
+        background: rgba(239, 68, 68, 0.16);
+      }
+
+      .empty {
+        padding: 34px 16px;
+        text-align: center;
+        color: var(--text-muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <section class="panel header">
+        <div>
+          <h1 class="title">ARGUS 이벤트 로그 분석</h1>
+          <p class="subtitle">날짜별 CSV 로그를 선택해 기록을 조회합니다.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="controls">
+          <span class="label">로그 날짜 파일</span>
+          <select id="file-select"></select>
+          <button id="refresh-btn" type="button">목록 새로고침</button>
+          <button id="open-btn" type="button">파일 열기</button>
+          <span id="status-text" class="status">준비 중...</span>
+        </div>
+        <div class="summary">
+          <div class="summary-card">
+            <p class="summary-label">전체 이벤트</p>
+            <p class="summary-value" id="sum-total">0</p>
+          </div>
+          <div class="summary-card">
+            <p class="summary-label">중요 (ALERT)</p>
+            <p class="summary-value alert" id="sum-alert">0</p>
+          </div>
+          <div class="summary-card">
+            <p class="summary-label">경고 (WARNING)</p>
+            <p class="summary-value warn" id="sum-warning">0</p>
+          </div>
+          <div class="summary-card">
+            <p class="summary-label">정보 (INFO)</p>
+            <p class="summary-value" id="sum-info">0</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 180px">시간</th>
+              <th style="width: 98px">유형</th>
+              <th>메시지</th>
+              <th style="width: 120px">객체 ID</th>
+              <th style="width: 120px">객체 분류</th>
+            </tr>
+          </thead>
+          <tbody id="log-body"></tbody>
+        </table>
+        <div id="empty-state" class="empty" hidden>표시할 로그가 없습니다.</div>
+      </section>
+    </div>
+
+    <script src="./log-viewer.js"></script>
+  </body>
+</html>

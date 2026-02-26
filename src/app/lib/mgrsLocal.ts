@@ -89,3 +89,12 @@ export const extract100kIdFromMgrs = (mgrs: string) => {
   const match = mgrs.trim().toUpperCase().match(/^\d{1,2}[C-HJ-NP-X]([A-HJ-NP-Z]{2})/);
   return match?.[1] ?? '';
 };
+
+export const extractSixDigitFromMgrs = (mgrs: string) => {
+  const match = mgrs
+    .trim()
+    .toUpperCase()
+    .match(/^\d{1,2}[C-HJ-NP-X][A-HJ-NP-Z]{2}(\d{3})(\d{3})/);
+  if (!match) return '';
+  return `${match[1]} ${match[2]}`;
+};

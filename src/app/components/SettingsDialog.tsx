@@ -89,7 +89,7 @@ export function SettingsDialog({
     return map;
   }, [presets]);
 
-  const handlePickDirectory = async (target: 'modelPath' | 'mapDataPath') => {
+  const handlePickDirectory = async (target: 'mapDataPath') => {
     if (typeof window === 'undefined') return;
 
     const runtime = (window as Window & { radarRuntime?: RadarRuntimeBridge }).radarRuntime;
@@ -99,9 +99,9 @@ export function SettingsDialog({
     }
 
     try {
-      const currentValue = target === 'modelPath' ? draft.modelPath : draft.mapDataPath;
+      const currentValue = draft.mapDataPath;
       const result = await runtime.pickDirectory({
-        title: target === 'modelPath' ? '모델 디렉토리 선택' : '지도 데이터 디렉토리 선택',
+        title: '지도 데이터 디렉토리 선택',
         defaultPath: currentValue?.trim() || undefined,
       });
       if (result?.error) {
@@ -110,7 +110,7 @@ export function SettingsDialog({
       }
       if (!result || result.canceled || !result.path) return;
 
-      const selectedPath = target === 'mapDataPath' ? result.path.replace(/\\/g, '/') : result.path;
+      const selectedPath = result.path.replace(/\\/g, '/');
       setDraft((prev) => ({
         ...prev,
         [target]: selectedPath,
@@ -258,36 +258,6 @@ export function SettingsDialog({
                   className="mt-1 h-9 w-full rounded border border-cyan-900/70 bg-[#09121a] px-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-cyan-500"
                 />
               </label>
-            </div>
-          </section>
-
-          <section className="rounded border border-cyan-900/60 bg-[#0d1721] p-4">
-            <h3 className="text-sm font-semibold text-cyan-300">모델 설정</h3>
-            <p className="text-xs text-gray-400 mt-1">ARGUS Brain 모델 파일/디렉터리 경로를 지정합니다.</p>
-            <div className="mt-3 flex flex-col md:flex-row gap-2">
-              <input
-                value={draft.modelPath}
-                onChange={(event) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    modelPath: event.target.value,
-                  }))
-                }
-                placeholder="/home/jung/models/argus_brain"
-                className="h-10 flex-1 rounded border border-cyan-900/70 bg-[#09121a] px-3 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-cyan-500"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  void handlePickDirectory('modelPath');
-                }}
-                className="argus-settings-path-browse-button h-10 px-3 rounded border border-cyan-700/70 bg-cyan-900/25 text-xs text-cyan-100 hover:bg-cyan-800/35 whitespace-nowrap"
-              >
-                <span className="inline-flex items-center gap-1">
-                  <FolderOpen className="h-3.5 w-3.5" />
-                  경로 탐색
-                </span>
-              </button>
             </div>
           </section>
 
