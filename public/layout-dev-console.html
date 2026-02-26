@@ -181,6 +181,14 @@
         align-items: center;
       }
 
+      .resolution-preset-select {
+        grid-column: 2 / span 2;
+      }
+
+      .resolution-spacer {
+        grid-column: 4 / span 2;
+      }
+
       .resolution-select {
         width: 100%;
         height: 34px;
@@ -239,7 +247,11 @@
           <div class="section-title">해상도 시뮬레이터</div>
           <div class="resolution-grid">
             <span class="label">프리셋</span>
-            <select id="resolutionPreset" class="resolution-select"></select>
+            <select id="resolutionPreset" class="resolution-select resolution-preset-select"></select>
+            <button id="resolutionReadButton" type="button" class="secondary">현재값</button>
+            <button id="resolutionApplyButton" type="button">적용</button>
+
+            <span class="label">사용자 지정</span>
             <input
               id="resolutionWidthInput"
               class="resolution-input"
@@ -248,10 +260,6 @@
               step="1"
               placeholder="width"
             />
-            <button id="resolutionApplyButton" type="button">적용</button>
-            <button id="resolutionReadButton" type="button" class="secondary">현재값</button>
-
-            <span class="label">사용자 지정</span>
             <input
               id="resolutionHeightInput"
               class="resolution-input"
@@ -260,6 +268,7 @@
               step="1"
               placeholder="height"
             />
+            <span class="resolution-spacer" aria-hidden="true"></span>
           </div>
           <div id="resolutionStatus" class="resolution-status">메인 창 해상도 정보를 확인 중...</div>
         </div>
