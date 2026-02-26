@@ -160,6 +160,7 @@ const DARK_TILE_ALPHA = 0.28;
 const LIGHT_TILE_ALPHA = 0.48;
 const TACTICAL_DARK_OVERLAY = 'rgba(3, 8, 14, 0.62)';
 const TACTICAL_LIGHT_OVERLAY = 'rgba(10, 18, 28, 0.16)';
+const SHOW_BASEMAP_IN_LIGHT_THEME = false;
 const DEFAULT_OFFICIAL_DATA_BASE_PATH = '/official';
 const OFFICIAL_BOUNDARY_FILES = [
   'korea_boundary.geojson',
@@ -1361,6 +1362,7 @@ export function LidarSpatialView({
       ? 'grayscale(100%) brightness(28%) contrast(125%)'
       : 'grayscale(45%) brightness(92%) contrast(108%)';
     const tileAlpha = isDarkTheme ? DARK_TILE_ALPHA : LIGHT_TILE_ALPHA;
+    const shouldRenderBasemapTiles = isDarkTheme || SHOW_BASEMAP_IN_LIGHT_THEME;
     const overlayColor = isDarkTheme ? TACTICAL_DARK_OVERLAY : TACTICAL_LIGHT_OVERLAY;
     const baseFill = isDarkTheme ? '#0b0f14' : '#dfe8ee';
     const ringColor = isDarkTheme ? 'rgba(74, 255, 128, 0.52)' : 'rgba(21, 94, 45, 0.52)';
@@ -1471,22 +1473,24 @@ export function LidarSpatialView({
       ctx.fillStyle = baseFill;
       ctx.fillRect(0, 0, width, height);
 
-      for (let tileY = startTileY - 1; tileY <= endTileY + 1; tileY += 1) {
-        if (tileY < 0 || tileY >= worldTileCount) continue;
+      if (shouldRenderBasemapTiles) {
+        for (let tileY = startTileY - 1; tileY <= endTileY + 1; tileY += 1) {
+          if (tileY < 0 || tileY >= worldTileCount) continue;
 
-        for (let tileX = startTileX - 1; tileX <= endTileX + 1; tileX += 1) {
-          const wrappedTileX = ((tileX % worldTileCount) + worldTileCount) % worldTileCount;
-          const tile = requestTile(mapTheme, mapZoom, wrappedTileX, tileY);
-          if (!tile.loaded || tile.failed) continue;
+          for (let tileX = startTileX - 1; tileX <= endTileX + 1; tileX += 1) {
+            const wrappedTileX = ((tileX % worldTileCount) + worldTileCount) % worldTileCount;
+            const tile = requestTile(mapTheme, mapZoom, wrappedTileX, tileY);
+            if (!tile.loaded || tile.failed) continue;
 
-          const drawX = tileX * TILE_SIZE - topLeftWorldX;
-          const drawY = tileY * TILE_SIZE - topLeftWorldY;
-          ctx.save();
-          ctx.filter = tileFilter;
-          ctx.globalAlpha = tileAlpha;
-          ctx.drawImage(tile.image, drawX, drawY, TILE_SIZE, TILE_SIZE);
-          ctx.restore();
-          hasVisibleTile = true;
+            const drawX = tileX * TILE_SIZE - topLeftWorldX;
+            const drawY = tileY * TILE_SIZE - topLeftWorldY;
+            ctx.save();
+            ctx.filter = tileFilter;
+            ctx.globalAlpha = tileAlpha;
+            ctx.drawImage(tile.image, drawX, drawY, TILE_SIZE, TILE_SIZE);
+            ctx.restore();
+            hasVisibleTile = true;
+          }
         }
       }
 
@@ -1495,14 +1499,14 @@ export function LidarSpatialView({
         ctx.fillRect(0, 0, width, height);
       }
 
-      ctx.fillStyle = hasVisibleTile
+      ctx.fillStyle = hasVisibleTile && shouldRenderBasemapTiles
         ? overlayColor
         : isDarkTheme
           ? 'rgba(6, 12, 18, 0.72)'
           : 'rgba(8, 18, 30, 0.1)';
       ctx.fillRect(0, 0, width, height);
 
-      if (!hasVisibleTile) {
+      if (!hasVisibleTile && shouldRenderBasemapTiles) {
         ctx.save();
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
