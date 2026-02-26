@@ -82,10 +82,11 @@ function StatusChip({
   className: string;
   fontScale?: number;
 }) {
+  const chipHeight = `${Math.max(22, Math.round(28 * fontScale))}px`;
   return (
     <span
-      className={`inline-flex h-7 items-center rounded border px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${className}`}
-      style={{ fontSize: `${(11 * fontScale).toFixed(1)}px` }}
+      className={`inline-flex items-center rounded border px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${className}`}
+      style={{ fontSize: `${(11 * fontScale).toFixed(1)}px`, height: chipHeight }}
     >
       {label}
     </span>
@@ -179,12 +180,19 @@ export function StatusBar({
   const buttonBase =
     'argus-control-button shrink-0 px-3 w-full flex items-center justify-center gap-2 border text-sm font-semibold whitespace-nowrap transition-all duration-200';
   const statusCardPaddingY = `${layoutDevConfig.statusCardPaddingY}px`;
+  const statusBarPaddingY = `${Math.max(4, Math.round(8 * statusFontScale))}px`;
+  const logoWidthPx = Math.max(64, Math.round(98 * statusFontScale));
+  const logoHeightPx = Math.max(52, Math.round(80 * statusFontScale));
   const statusColumnsTemplate = `minmax(280px, ${layoutDevConfig.statusSystemFr}fr) minmax(0, ${layoutDevConfig.statusPerformanceFr}fr) minmax(360px, ${layoutDevConfig.statusControlsFr}fr)`;
 
   return (
     <div
-      className="argus-surface argus-statusbar bg-[#0a0d12] border-b border-cyan-950/50 px-4 py-2 shadow-lg shadow-black/40"
-      style={{ ['--argus-status-font-scale' as string]: String(layoutDevConfig.statusFontScale) }}
+      className="argus-surface argus-statusbar bg-[#0a0d12] border-b border-cyan-950/50 px-4 shadow-lg shadow-black/40"
+      style={{
+        ['--argus-status-font-scale' as string]: String(layoutDevConfig.statusFontScale),
+        paddingTop: statusBarPaddingY,
+        paddingBottom: statusBarPaddingY,
+      }}
     >
       <div className="grid gap-3 xl:grid-cols-[minmax(280px,0.95fr)_minmax(0,1.55fr)_minmax(360px,1.05fr)]" style={{ gridTemplateColumns: statusColumnsTemplate }}>
         <section className="argus-status-card rounded border border-cyan-950/60 bg-[#0c1219] px-4" style={{ paddingTop: statusCardPaddingY, paddingBottom: statusCardPaddingY }}>
@@ -193,7 +201,8 @@ export function StatusBar({
             <button
               type="button"
               onClick={onLogoSecretTap}
-              className="argus-brand-logo-frame h-[80px] w-[98px] shrink-0 overflow-hidden rounded bg-transparent cursor-default border-0 p-0 m-0 focus:outline-none"
+              className="argus-brand-logo-frame shrink-0 overflow-hidden rounded bg-transparent cursor-default border-0 p-0 m-0 focus:outline-none"
+              style={{ width: `${logoWidthPx}px`, height: `${logoHeightPx}px` }}
               aria-label="ARGUS logo"
             >
               <img

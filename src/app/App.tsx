@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { StatusBar } from './components/StatusBar';
 import { LidarSpatialView } from './components/LidarSpatialView';
 import { SelectedTargetPanel } from './components/SelectedTargetPanel';
@@ -97,6 +97,16 @@ const DEFAULT_CONSOLE_SETTINGS: ConsoleSettings = {
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const readViewportSize = () => {
+  if (typeof window === 'undefined') {
+    return { width: 1920, height: 1080 };
+  }
+  return {
+    width: Math.max(960, Math.round(window.innerWidth || 1920)),
+    height: Math.max(620, Math.round(window.innerHeight || 1080)),
+  };
+};
 
 const sanitizeCenter = (lat: number, lon: number) => ({
   lat: clamp(lat, 32.7, 39.9),
@@ -364,6 +374,9 @@ function App() {
   const useArgusBridge = isArgusConfigured();
   const [settings, setSettings] = useState<ConsoleSettings>(() => readInitialSettings());
   const [layoutDevConfig, setLayoutDevConfig] = useState<LayoutDevConfig>(() => readLayoutDevConfig());
+  const [viewportSize, setViewportSize] = useState(() => readViewportSize());
+  const mainGridRef = useRef<HTMLDivElement | null>(null);
+  const [mainGridViewportSize, setMainGridViewportSize] = useState({ width: 0, height: 0 });
   const [previewTheme, setPreviewTheme] = useState<ConsoleSettings['mapTheme'] | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAutoTrackingOpen, setIsAutoTrackingOpen] = useState(false);
@@ -540,6 +553,51 @@ function App() {
       window.removeEventListener('storage', handleStorage);
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const syncViewport = () => {
+      setViewportSize(readViewportSize());
+    };
+
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    return () => {
+      window.removeEventListener('resize', syncViewport);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const node = mainGridRef.current;
+    if (!node) return;
+
+    const updateSize = () => {
+      const rect = node.getBoundingClientRect();
+      setMainGridViewportSize({
+        width: Math.max(0, Math.round(rect.width)),
+        height: Math.max(0, Math.round(rect.height)),
+      });
+    };
+
+    updateSize();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateSize);
+      return () => {
+        window.removeEventListener('resize', updateSize);
+      };
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateSize();
+    });
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, [viewportSize.width, viewportSize.height]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1134,6 +1192,144 @@ function App() {
   const threatCount = visibleObjects.filter(
     (obj) => obj.riskLevel === 'HIGH' || obj.riskLevel === 'CRITICAL'
   ).length;
+  const isHdViewport = viewportSize.width <= 1366 || viewportSize.height <= 768;
+  const isHdPlusViewport =
+    !isHdViewport && (viewportSize.width <= 1600 || viewportSize.height <= 900);
+  const responsiveDensityScale = useMemo(
+    () =>
+      clamp(
+        Math.min(viewportSize.width / 1920, viewportSize.height / 1080),
+        0.76,
+        1
+      ),
+    [viewportSize.height, viewportSize.width]
+  );
+
+  const effectiveLayoutDevConfig = useMemo<LayoutDevConfig>(() => {
+    const compactBias = isHdViewport ? 0.78 : isHdPlusViewport ? 0.88 : 1;
+    const compactScale = clamp((0.82 + responsiveDensityScale * 0.18) * compactBias, 0.68, 1);
+    const typographyScale = clamp(
+      compactScale * (isHdViewport ? 0.94 : isHdPlusViewport ? 0.97 : 1),
+      0.64,
+      1
+    );
+    const panelScale = clamp(
+      compactScale * (isHdViewport ? 0.9 : isHdPlusViewport ? 0.95 : 1),
+      0.62,
+      1
+    );
+    const leftColumnAdjustment =
+      viewportSize.width <= 1366 ? -6 : viewportSize.width <= 1600 ? -3 : 0;
+
+    return {
+      ...layoutDevConfig,
+      statusCardPaddingY: Math.max(4, Math.round(layoutDevConfig.statusCardPaddingY * panelScale)),
+      metricBoxHeight: Math.max(34, Math.round(layoutDevConfig.metricBoxHeight * panelScale)),
+      controlButtonHeight: Math.max(
+        26,
+        Math.round(layoutDevConfig.controlButtonHeight * panelScale)
+      ),
+      statusFontScale: clamp(layoutDevConfig.statusFontScale * typographyScale, 0.62, 1.6),
+      leftColumnVw: clamp(layoutDevConfig.leftColumnVw + leftColumnAdjustment, 34, 52),
+      mapHeaderPaddingY: Math.max(6, Math.round(layoutDevConfig.mapHeaderPaddingY * panelScale)),
+      mapLegendPaddingY: Math.max(6, Math.round(layoutDevConfig.mapLegendPaddingY * panelScale)),
+      mapFontScale: clamp(layoutDevConfig.mapFontScale * typographyScale, 0.64, 1.6),
+      selectedPanelFontScale: clamp(
+        layoutDevConfig.selectedPanelFontScale * typographyScale,
+        0.64,
+        1.6
+      ),
+      tableFontScale: clamp(layoutDevConfig.tableFontScale * typographyScale, 0.64, 1.6),
+      candidateFontScale: clamp(layoutDevConfig.candidateFontScale * typographyScale, 0.64, 1.6),
+      timelineFontScale: clamp(layoutDevConfig.timelineFontScale * typographyScale, 0.64, 1.6),
+    };
+  }, [isHdPlusViewport, isHdViewport, layoutDevConfig, responsiveDensityScale, viewportSize.width]);
+
+  const responsiveMainGridLayout = useMemo(() => {
+    const gridWidth = Math.max(960, mainGridViewportSize.width || viewportSize.width);
+    const gridHeight = Math.max(420, mainGridViewportSize.height || Math.round(viewportSize.height - 170));
+    const isHdHeight = viewportSize.height <= 768;
+    const isHdPlusHeight = viewportSize.height <= 900;
+    const isHdWidth = viewportSize.width <= 1366;
+    const isHdPlusWidth = viewportSize.width <= 1600;
+
+    const leftMinDefault = isHdWidth ? 500 : isHdPlusWidth ? 560 : 700;
+    const rightMinDefault = isHdWidth ? 420 : isHdPlusWidth ? 480 : 540;
+    let leftMinPx = leftMinDefault;
+    let rightMinPx = rightMinDefault;
+    if (leftMinPx + rightMinPx > gridWidth) {
+      leftMinPx = Math.max(360, Math.floor(gridWidth * 0.54));
+      rightMinPx = Math.max(320, gridWidth - leftMinPx);
+    }
+
+    const rowCompactScale = isHdHeight ? 0.78 : isHdPlusHeight ? 0.88 : 1;
+    const topTarget = Math.max(
+      isHdHeight ? 190 : 220,
+      Math.round(layoutDevConfig.topRowPx * rowCompactScale)
+    );
+    const trackedTarget = Math.max(
+      isHdHeight ? 68 : 72,
+      Math.round(layoutDevConfig.trackedRowMinPx * rowCompactScale)
+    );
+    const bottomTarget = Math.max(
+      isHdHeight ? 112 : 120,
+      Math.round(layoutDevConfig.bottomRowPx * rowCompactScale)
+    );
+
+    const softMinTop = isHdHeight ? 210 : isHdPlusHeight ? 250 : 340;
+    const softMinTracked = isHdHeight ? 78 : isHdPlusHeight ? 90 : 115;
+    const softMinBottom = isHdHeight ? 130 : isHdPlusHeight ? 152 : 190;
+    const hardMinTop = isHdHeight ? 176 : 220;
+    const hardMinTracked = isHdHeight ? 64 : 72;
+    const hardMinBottom = isHdHeight ? 104 : 120;
+
+    let topRowPx = topTarget;
+    let trackedRowMinPx = trackedTarget;
+    let bottomRowPx = bottomTarget;
+    let deficit = topRowPx + trackedRowMinPx + bottomRowPx - gridHeight;
+
+    const reduceWithLimit = (value: number, min: number) => {
+      if (deficit <= 0) return value;
+      const reducible = Math.max(0, value - min);
+      const delta = Math.min(deficit, reducible);
+      deficit -= delta;
+      return value - delta;
+    };
+
+    if (deficit > 0) {
+      topRowPx = reduceWithLimit(topRowPx, softMinTop);
+      bottomRowPx = reduceWithLimit(bottomRowPx, softMinBottom);
+      trackedRowMinPx = reduceWithLimit(trackedRowMinPx, softMinTracked);
+    }
+
+    if (deficit > 0) {
+      topRowPx = reduceWithLimit(topRowPx, hardMinTop);
+      bottomRowPx = reduceWithLimit(bottomRowPx, hardMinBottom);
+      trackedRowMinPx = reduceWithLimit(trackedRowMinPx, hardMinTracked);
+    }
+
+    if (deficit > 0) {
+      trackedRowMinPx = Math.max(hardMinTracked, trackedRowMinPx - deficit);
+      deficit = 0;
+    }
+
+    return {
+      gridTemplateColumns: `minmax(${leftMinPx}px, ${effectiveLayoutDevConfig.leftColumnVw}vw) minmax(${rightMinPx}px, 1fr)`,
+      gridTemplateRows: `${Math.round(topRowPx)}px minmax(${Math.round(
+        trackedRowMinPx
+      )}px, 1fr) ${Math.round(bottomRowPx)}px`,
+    };
+  }, [
+    effectiveLayoutDevConfig.leftColumnVw,
+    layoutDevConfig.bottomRowPx,
+    layoutDevConfig.topRowPx,
+    layoutDevConfig.trackedRowMinPx,
+    mainGridViewportSize.height,
+    mainGridViewportSize.width,
+    responsiveDensityScale,
+    viewportSize.height,
+    viewportSize.width,
+  ]);
 
   return (
     <div
@@ -1156,19 +1352,14 @@ function App() {
         onOpenAutoTracking={handleOpenAutoTracking}
         onOpenLogViewer={handleOpenLogViewer}
         onLogoSecretTap={handleLogoSecretTap}
-        layoutDevConfig={layoutDevConfig}
+        layoutDevConfig={effectiveLayoutDevConfig}
       />
 
       {/* Main Content Grid */}
       <div
+        ref={mainGridRef}
         className="argus-main-grid flex-1 grid overflow-hidden"
-        style={{
-          gridTemplateColumns: `minmax(700px, ${layoutDevConfig.leftColumnVw}vw) 1fr`,
-          gridTemplateRows: `${layoutDevConfig.topRowPx}px minmax(${layoutDevConfig.trackedRowMinPx}px, 1fr) minmax(${layoutDevConfig.bottomRowPx}px, ${Math.max(
-            18,
-            Math.round(layoutDevConfig.bottomRowPx / 8.6)
-          )}vh)`,
-        }}
+        style={responsiveMainGridLayout}
       >
         {/* Left Panel - LiDAR Spatial View (spans 3 rows) */}
         <div className="row-span-3">
@@ -1184,13 +1375,16 @@ function App() {
             showMgrsLabels={settings.showMgrsLabels}
             mapDataPath={settings.mapDataPath}
             mapDataLoadNonce={settings.mapDataLoadNonce}
-            layoutDevConfig={layoutDevConfig}
+            layoutDevConfig={effectiveLayoutDevConfig}
           />
         </div>
 
         {/* Right Top - Selected Target Panel */}
         <div className="overflow-hidden">
-          <SelectedTargetPanel selectedObject={selectedObject} layoutDevConfig={layoutDevConfig} />
+          <SelectedTargetPanel
+            selectedObject={selectedObject}
+            layoutDevConfig={effectiveLayoutDevConfig}
+          />
         </div>
 
         {/* Right Middle - Object List Table */}
@@ -1199,7 +1393,7 @@ function App() {
             objects={visibleObjects}
             selectedObjectId={selectedObjectId}
             onSelectObject={handleSelectObject}
-            layoutDevConfig={layoutDevConfig}
+            layoutDevConfig={effectiveLayoutDevConfig}
           />
         </div>
 
@@ -1212,7 +1406,7 @@ function App() {
             <CandidateTracksPanel 
               objects={visibleObjects} 
               onSelectObject={handleSelectObject} 
-              layoutDevConfig={layoutDevConfig}
+              layoutDevConfig={effectiveLayoutDevConfig}
             />
           </div>
           <div className="min-h-0" style={{ width: `${100 - layoutDevConfig.bottomLeftPercent}%` }}>
@@ -1220,7 +1414,7 @@ function App() {
               events={events}
               objects={visibleObjects}
               onClearEvents={handleClearTimelineView}
-              layoutDevConfig={layoutDevConfig}
+              layoutDevConfig={effectiveLayoutDevConfig}
             />
           </div>
         </div>
