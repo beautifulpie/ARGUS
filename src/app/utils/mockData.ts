@@ -18,10 +18,33 @@ const KOREA_BOUNDS = {
   maxLon: 132.2,
 };
 const METERS_PER_RADAR_UNIT = 150;
+const MAX_DETECTION_RANGE_KM = 35;
+const MAX_DETECTION_RANGE_UNITS = (MAX_DETECTION_RANGE_KM * 1000) / METERS_PER_RADAR_UNIT;
 const CALIBRATION_STORAGE_KEY = 'argus.map.calibration.v1';
 
 let objectIdCounter = 1;
 let existingObjects: DetectedObject[] = [];
+type MockLostReason = 'OUT_OF_RANGE' | 'SIGNAL_LOST';
+const mockLostReasons = new Map<string, MockLostReason>();
+
+interface SpeedProfile {
+  base: number;
+  min: number;
+  max: number;
+  jitter: number;
+}
+
+const SPEED_PROFILE_MPS: Record<ObjectClass, SpeedProfile> = {
+  HELICOPTER: { base: 68, min: 40, max: 95, jitter: 7 },
+  UAV: { base: 32, min: 15, max: 60, jitter: 6 },
+  HIGHSPEED: { base: 370, min: 320, max: 430, jitter: 10 },
+  BIRD_FLOCK: { base: 18, min: 8, max: 32, jitter: 3 },
+  BIRD: { base: 11, min: 4, max: 22, jitter: 2.5 },
+  CIVIL_AIR: { base: 272, min: 240, max: 315, jitter: 8 },
+  FIGHTER: { base: 240, min: 180, max: 320, jitter: 10 },
+};
+
+const SPEED_TO_PLANAR_VELOCITY = 1 / 15;
 
 const clamp = (value: number, min: number, max: number): number => {
   if (value < min) return min;
@@ -88,6 +111,33 @@ const estimateUavProbability = (
   return clamp(score, 1, 99);
 };
 
+const sampleSpeedForClass = (objectClass: ObjectClass, previousSpeed?: number): number => {
+  const profile = SPEED_PROFILE_MPS[objectClass];
+  if (previousSpeed === undefined) {
+    return clamp(
+      profile.base + (Math.random() - 0.5) * profile.jitter * 2,
+      profile.min,
+      profile.max
+    );
+  }
+
+  const driftToBase = (profile.base - previousSpeed) * 0.04;
+  const noise = (Math.random() - 0.5) * profile.jitter * 0.45;
+  return clamp(previousSpeed + driftToBase + noise, profile.min, profile.max);
+};
+
+const speedToPlanarVelocity = (speedMps: number): number =>
+  Math.max(0.6, speedMps * SPEED_TO_PLANAR_VELOCITY);
+
+const isWithinDetectionRange = (position: { x: number; y: number }): boolean =>
+  Math.hypot(position.x, position.y) <= MAX_DETECTION_RANGE_UNITS;
+
+export function consumeMockLostReasons(): Map<string, MockLostReason> {
+  const snapshot = new Map(mockLostReasons);
+  mockLostReasons.clear();
+  return snapshot;
+}
+
 const toUavDecision = (probability: number, threshold: number): DetectedObject['uavDecision'] => {
   if (probability >= threshold) return 'UAV';
   if (probability <= threshold - 20) return 'NON_UAV';
@@ -128,26 +178,44 @@ const predictPath = (pos: { x: number; y: number }, vel: { x: number; y: number 
 };
 
 // Generate a new detected object with realistic physics
-export function generateDetectedObject(existing?: DetectedObject): DetectedObject {
+export function generateDetectedObject(existing?: DetectedObject, deltaSeconds = 1): DetectedObject {
   const id = existing?.id || `TRK-${String(objectIdCounter++).padStart(4, '0')}`;
   const uavThreshold = existing?.uavThreshold ?? 35;
+  const timeScale = clamp(deltaSeconds, 0.02, 2);
+  const enforceMinPlanarVelocity = (velocity: { x: number; y: number; z: number }) => {
+    const planar = Math.hypot(velocity.x, velocity.y);
+    const minPlanar = 0.6;
+    if (planar >= minPlanar) return velocity;
+    const angle = planar > 0.0001 ? Math.atan2(velocity.y, velocity.x) : Math.random() * Math.PI * 2;
+    return {
+      x: Math.cos(angle) * minPlanar,
+      y: Math.sin(angle) * minPlanar,
+      z: velocity.z,
+    };
+  };
   
   // If updating existing, maintain some continuity
   if (existing) {
+    const speed = sampleSpeedForClass(existing.class, existing.speed);
+    const previousPlanar = Math.hypot(existing.velocity.x, existing.velocity.y);
+    const previousHeading =
+      previousPlanar > 0.0001 ? Math.atan2(existing.velocity.y, existing.velocity.x) : Math.random() * Math.PI * 2;
+    const heading = previousHeading + (Math.random() - 0.5) * 0.08 * timeScale;
+    const planarVelocityMag = speedToPlanarVelocity(speed);
+
+    // Map movement is now directly tied to class speed profile.
+    const velocity = enforceMinPlanarVelocity({
+      x: Math.cos(heading) * planarVelocityMag,
+      y: Math.sin(heading) * planarVelocityMag,
+      z: existing.velocity.z + (Math.random() - 0.5) * 0.05 * timeScale,
+    });
+
     const position = {
-      x: existing.position.x + existing.velocity.x * 0.1,
-      y: existing.position.y + existing.velocity.y * 0.1,
-      z: existing.position.z + existing.velocity.z * 0.1,
+      // Use freshly sampled velocity so class speed changes are reflected immediately on map motion.
+      x: existing.position.x + velocity.x * 0.1 * timeScale,
+      y: existing.position.y + velocity.y * 0.1 * timeScale,
+      z: existing.position.z + velocity.z * 0.1 * timeScale,
     };
-
-    // Small velocity variations
-    const velocity = {
-      x: existing.velocity.x + (Math.random() - 0.5) * 0.5,
-      y: existing.velocity.y + (Math.random() - 0.5) * 0.5,
-      z: existing.velocity.z + (Math.random() - 0.5) * 0.05,
-    };
-
-    const speed = Math.sqrt(velocity.x ** 2 + velocity.y ** 2 + velocity.z ** 2);
     const distance = Math.sqrt(position.x ** 2 + position.y ** 2);
     const uavProbability = estimateUavProbability(existing.class, speed, distance);
     const fallbackSensorGeo = readSensorCalibration();
@@ -190,7 +258,7 @@ export function generateDetectedObject(existing?: DetectedObject): DetectedObjec
       velocity,
       speed,
       distance,
-      trackingDuration: existing.trackingDuration + 1,
+      trackingDuration: existing.trackingDuration + timeScale,
       status: existing.status === 'CANDIDATE' ? 'CANDIDATE' : 'TRACKING' as ObjectStatus,
       timestamp: new Date(),
       trackHistory,
@@ -209,34 +277,26 @@ export function generateDetectedObject(existing?: DetectedObject): DetectedObjec
   // New object
   const objectClass: ObjectClass = OBJECT_CLASSES[Math.floor(Math.random() * OBJECT_CLASSES.length)];
   
-  // Random position in detection range (-100 to 100 km scaled down)
+  // Keep initial mock tracks inside radar observability range (35km).
   const angle = Math.random() * Math.PI * 2;
-  const dist = 20 + Math.random() * 80;
+  const maxSpawnDistance = Math.min(80, MAX_DETECTION_RANGE_UNITS * 0.9);
+  const minSpawnDistance = Math.min(20, maxSpawnDistance);
+  const dist = minSpawnDistance + Math.random() * Math.max(1, maxSpawnDistance - minSpawnDistance);
   const position = {
     x: Math.cos(angle) * dist,
     y: Math.sin(angle) * dist,
     z: 100 + Math.random() * 5000, // Altitude
   };
 
-  // Random velocity based on object class
-  let maxSpeed = 100; // m/s
-  if (objectClass === 'UAV') maxSpeed = 40;
-  else if (objectClass === 'HELICOPTER') maxSpeed = 80;
-  else if (objectClass === 'HIGHSPEED') maxSpeed = 600;
-  else if (objectClass === 'FIGHTER') maxSpeed = 400;
-  else if (objectClass === 'CIVIL_AIR') maxSpeed = 250;
-  else if (objectClass === 'BIRD') maxSpeed = 15;
-  else if (objectClass === 'BIRD_FLOCK') maxSpeed = 20;
-
+  const speed = sampleSpeedForClass(objectClass);
   const velocityAngle = Math.random() * Math.PI * 2;
-  const velocityMag = Math.random() * maxSpeed * 0.1; // scaled for simulation step
-  const velocity = {
-    x: Math.cos(velocityAngle) * velocityMag,
-    y: Math.sin(velocityAngle) * velocityMag,
+  const planarVelocityMag = speedToPlanarVelocity(speed) * (0.94 + Math.random() * 0.12);
+  const velocity = enforceMinPlanarVelocity({
+    x: Math.cos(velocityAngle) * planarVelocityMag,
+    y: Math.sin(velocityAngle) * planarVelocityMag,
     z: (Math.random() - 0.5) * 5,
-  };
+  });
 
-  const speed = Math.sqrt(velocity.x ** 2 + velocity.y ** 2 + velocity.z ** 2);
   const uavProbability = estimateUavProbability(objectClass, speed, Math.sqrt(position.x ** 2 + position.y ** 2));
 
   // Size based on class
@@ -300,9 +360,22 @@ export function generateDetectedObject(existing?: DetectedObject): DetectedObjec
   };
 }
 
+const probabilityForDelta = (probabilityPerSecond: number, deltaSeconds: number): number => {
+  const bounded = clamp(probabilityPerSecond, 0, 1);
+  if (bounded <= 0) return 0;
+  if (bounded >= 1) return 1;
+  return 1 - Math.pow(1 - bounded, Math.max(0.001, deltaSeconds));
+};
+
 // Manage object lifecycle: create, update, remove
-export function updateObjectTracking(currentObjects: DetectedObject[]): DetectedObject[] {
+export function updateObjectTracking(currentObjects: DetectedObject[], deltaSeconds = 1): DetectedObject[] {
   const updated: DetectedObject[] = [];
+  mockLostReasons.clear();
+  const timeScale = clamp(deltaSeconds, 0.02, 2);
+  const reacquireChance = probabilityForDelta(0.2, timeScale);
+  const dropChance = probabilityForDelta(0.1, timeScale);
+  const coastChance = probabilityForDelta(0.02, timeScale);
+  const spawnChance = probabilityForDelta(0.1, timeScale);
 
   // Update existing objects
   for (const obj of currentObjects) {
@@ -312,12 +385,12 @@ export function updateObjectTracking(currentObjects: DetectedObject[]): Detected
     // State transitions
     if (obj.status === 'CANDIDATE') {
       // 20% chance to re-acquire signal
-      if (Math.random() < 0.2) {
+      if (Math.random() < reacquireChance) {
         newStatus = 'TRACKING';
         newConfidence = 70 + Math.random() * 20;
       } 
       // 10% chance to fully lose track if it's been a candidate for a while
-      else if (Math.random() < 0.1) {
+      else if (Math.random() < dropChance) {
         newStatus = 'LOST';
       }
       // Decay confidence while coasting
@@ -326,7 +399,7 @@ export function updateObjectTracking(currentObjects: DetectedObject[]): Detected
       }
     } else {
       // 2% chance to lose signal and become a candidate (coast mode)
-      if (Math.random() < 0.02 && obj.trackingDuration > 3) {
+      if (Math.random() < coastChance && obj.trackingDuration > 3) {
         newStatus = 'CANDIDATE';
         newConfidence = 40; // Drop confidence immediately
       }
@@ -334,6 +407,7 @@ export function updateObjectTracking(currentObjects: DetectedObject[]): Detected
 
     if (newStatus === 'LOST') {
       // Don't include in next frame
+      mockLostReasons.set(obj.id, 'SIGNAL_LOST');
       continue;
     }
 
@@ -344,7 +418,13 @@ export function updateObjectTracking(currentObjects: DetectedObject[]): Detected
       ...obj,
       status: newStatus,
       confidence: newConfidence,
-    });
+    }, timeScale);
+
+    // Tracks outside radar observable range are dropped from mock feed.
+    if (!isWithinDetectionRange(updatedObj.position)) {
+      mockLostReasons.set(updatedObj.id, 'OUT_OF_RANGE');
+      continue;
+    }
     
     // Mark as STABLE if tracked for >5 seconds and not a candidate
     if (updatedObj.status !== 'CANDIDATE' && updatedObj.trackingDuration > 5) {
@@ -357,7 +437,7 @@ export function updateObjectTracking(currentObjects: DetectedObject[]): Detected
   // Remove lost objects (already handled by continue)
   
   // 10% chance to add new object if we have < 12 objects
-  if (Math.random() < 0.1 && updated.length < 12) {
+  if (Math.random() < spawnChance && updated.length < 12) {
     updated.push(generateDetectedObject());
   }
 
@@ -373,7 +453,7 @@ export function generateSystemStatus(isLive: boolean, objectCount: number): Syst
     modelVersion: 'v4.1.0',
     device: 'AESA-Array-X1',
     latency: 2.5 + Math.random() * 4,
-    fps: 58 + Math.random() * 12,
+    fps: 0,
     trackedObjects: objectCount,
     activeTracksCount,
     totalDetected: objectIdCounter - 1,
