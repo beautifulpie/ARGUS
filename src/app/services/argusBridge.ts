@@ -1,11 +1,15 @@
 import { ARGUS_CONFIG, buildArgusUrl } from '../config/argus';
 import {
+  CombinedInferenceResult,
   DetectedObject,
   GeoPosition,
+  InferenceSource,
   ObjectClass,
   ObjectStatus,
   RiskLevel,
   SystemStatus,
+  TodClassProbability,
+  TodInferenceResult,
   TimelineEvent,
   UavDecision,
 } from '../types';
@@ -92,6 +96,15 @@ const UAV_DECISION_ALIASES: Record<string, UavDecision> = {
   UNK: 'UNKNOWN',
 };
 
+const INFERENCE_SOURCE_ALIASES: Record<string, InferenceSource> = {
+  RADAR_SIGNAL: 'RADAR_SIGNAL',
+  SIGNAL: 'RADAR_SIGNAL',
+  TOD_YOLO: 'TOD_YOLO',
+  TOD: 'TOD_YOLO',
+  YOLO: 'TOD_YOLO',
+  VISION: 'TOD_YOLO',
+};
+
 const DEFAULT_SIZE = { width: 10, height: 4, length: 15 };
 
 const toRecord = (value: unknown): AnyRecord => {
@@ -143,6 +156,20 @@ const normalizeClass = (value: unknown, fallback: ObjectClass): ObjectClass => {
   return CLASS_ALIASES[normalized] || fallback;
 };
 
+const normalizeClassOrUnknown = (
+  value: unknown,
+  fallback: ObjectClass | 'UNKNOWN' = 'UNKNOWN'
+): ObjectClass | 'UNKNOWN' => {
+  const normalized = toStringOrEmpty(value).replace(/\s+/g, '_').toUpperCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized === 'UNKNOWN' || normalized === 'UNK') {
+    return 'UNKNOWN';
+  }
+  return CLASS_ALIASES[normalized] || fallback;
+};
+
 const normalizeStatus = (value: unknown, fallback: ObjectStatus): ObjectStatus => {
   const normalized = toStringOrEmpty(value).replace(/\s+/g, '_').toUpperCase();
   return STATUS_ALIASES[normalized] || fallback;
@@ -168,6 +195,14 @@ const normalizeUavDecision = (value: unknown, fallback: UavDecision): UavDecisio
   return UAV_DECISION_ALIASES[normalized] || fallback;
 };
 
+const normalizeInferenceSource = (
+  value: unknown,
+  fallback: InferenceSource = 'RADAR_SIGNAL'
+): InferenceSource => {
+  const normalized = toStringOrEmpty(value).replace(/\s+/g, '_').toUpperCase();
+  return INFERENCE_SOURCE_ALIASES[normalized] || fallback;
+};
+
 const toConfidencePercent = (value: unknown, fallback: number): number => {
   const numeric = toNumber(value, fallback);
   const scaled = numeric <= 1 ? numeric * 100 : numeric;
@@ -185,6 +220,21 @@ const estimateRiskLevel = (objectClass: ObjectClass, distance: number): RiskLeve
     return 'MEDIUM';
   }
   return 'LOW';
+};
+
+const estimateRadarTrackScore = (
+  confidence: number,
+  uavProbability: number,
+  status: ObjectStatus
+): number => {
+  const statusBias: Record<ObjectStatus, number> = {
+    STABLE: 8,
+    TRACKING: 4,
+    NEW: 1,
+    CANDIDATE: -10,
+    LOST: -18,
+  };
+  return clamp(confidence * 0.62 + uavProbability * 0.38 + statusBias[status], 0, 100);
 };
 
 const toPoint = (value: unknown): { x: number; y: number } | null => {
@@ -293,6 +343,190 @@ const buildProbabilities = (
     .slice(0, OBJECT_CLASSES.length);
 };
 
+const buildTodProbabilities = (
+  rawProbabilities: unknown,
+  fallbackClass: ObjectClass | 'UNKNOWN',
+  fallbackConfidence: number
+): TodClassProbability[] => {
+  const probabilities: TodClassProbability[] = [];
+
+  if (Array.isArray(rawProbabilities)) {
+    for (const entry of rawProbabilities) {
+      const record = toRecord(entry);
+      const mappedClass = normalizeClassOrUnknown(
+        record.className ?? record.class ?? record.label ?? record.type,
+        fallbackClass
+      );
+      const probability = toConfidencePercent(
+        record.probability ?? record.score ?? record.confidence,
+        0
+      );
+      probabilities.push({ className: mappedClass, probability });
+    }
+  } else {
+    const probabilityMap = toRecord(rawProbabilities);
+    for (const [className, probability] of Object.entries(probabilityMap)) {
+      probabilities.push({
+        className: normalizeClassOrUnknown(className, fallbackClass),
+        probability: toConfidencePercent(probability, 0),
+      });
+    }
+  }
+
+  const hasPrimary = probabilities.some((item) => item.className === fallbackClass);
+  if (!hasPrimary) {
+    probabilities.push({
+      className: fallbackClass,
+      probability: toConfidencePercent(fallbackConfidence, 0),
+    });
+  }
+
+  const deduped = new Map<TodClassProbability['className'], number>();
+  probabilities.forEach((item) => {
+    const existing = deduped.get(item.className);
+    if (existing === undefined || item.probability > existing) {
+      deduped.set(item.className, item.probability);
+    }
+  });
+
+  return Array.from(deduped.entries())
+    .map(([className, probability]) => ({ className, probability }))
+    .sort((a, b) => b.probability - a.probability);
+};
+
+const mapTodInference = (
+  rawTodInference: unknown,
+  previousTodInference: TodInferenceResult | undefined
+): TodInferenceResult | undefined => {
+  const record = toRecord(rawTodInference);
+  const hasExplicitTodFields =
+    Object.keys(record).length > 0 ||
+    previousTodInference !== undefined;
+  if (!hasExplicitTodFields) {
+    return undefined;
+  }
+
+  const available =
+    typeof record.available === 'boolean'
+      ? record.available
+      : previousTodInference?.available ?? false;
+  const className = normalizeClassOrUnknown(
+    record.className ?? record.class ?? record.label,
+    previousTodInference?.className ?? 'UNKNOWN'
+  );
+  const confidence = toConfidencePercent(
+    record.confidence ?? record.score,
+    previousTodInference?.confidence ?? 0
+  );
+  const probabilities = buildTodProbabilities(
+    record.probabilities,
+    className,
+    confidence
+  ).slice(0, OBJECT_CLASSES.length);
+  const sourceTypeRaw = toStringOrEmpty(record.sourceType).toUpperCase();
+  const sourceType: TodInferenceResult['sourceType'] =
+    sourceTypeRaw === 'IMAGE' || sourceTypeRaw === 'VIDEO' || sourceTypeRaw === 'UNKNOWN'
+      ? sourceTypeRaw
+      : previousTodInference?.sourceType ?? 'UNKNOWN';
+
+  return {
+    available,
+    className,
+    confidence,
+    probabilities,
+    detectionCount: Math.max(
+      0,
+      Math.floor(
+        toNumber(record.detectionCount ?? record.detections, previousTodInference?.detectionCount ?? 0)
+      )
+    ),
+    sourcePath:
+      toStringOrEmpty(record.sourcePath ?? record.mediaPath) ||
+      previousTodInference?.sourcePath ||
+      '',
+    sourceType,
+    decodedPath:
+      toStringOrEmpty(record.decodedPath) ||
+      previousTodInference?.decodedPath,
+    decoderUsed:
+      typeof record.decoderUsed === 'boolean'
+        ? record.decoderUsed
+        : previousTodInference?.decoderUsed,
+    decoderLatencyMs: clamp(
+      toNumber(record.decoderLatencyMs, previousTodInference?.decoderLatencyMs ?? 0),
+      0,
+      600000
+    ),
+    modelId: toStringOrEmpty(record.modelId) || previousTodInference?.modelId || '',
+    modelVersion: toStringOrEmpty(record.modelVersion) || previousTodInference?.modelVersion || '',
+    latencyMs: clamp(
+      toNumber(record.latencyMs ?? record.inferenceLatencyMs, previousTodInference?.latencyMs ?? 0),
+      0,
+      10000
+    ),
+    cacheHit:
+      typeof record.cacheHit === 'boolean'
+        ? record.cacheHit
+        : previousTodInference?.cacheHit,
+    reason: toStringOrEmpty(record.reason) || previousTodInference?.reason || '',
+  };
+};
+
+const mapCombinedInference = (
+  rawCombinedInference: unknown,
+  signalClass: ObjectClass,
+  signalConfidence: number,
+  todInference: TodInferenceResult | undefined
+): CombinedInferenceResult => {
+  const record = toRecord(rawCombinedInference);
+  const selectedSource = normalizeInferenceSource(
+    record.selectedSource ?? record.source,
+    'RADAR_SIGNAL'
+  );
+  const className = normalizeClassOrUnknown(
+    record.className ?? record.class,
+    selectedSource === 'TOD_YOLO'
+      ? (todInference?.className ?? signalClass)
+      : signalClass
+  );
+  const confidence = toConfidencePercent(
+    record.confidence ?? record.score,
+    selectedSource === 'TOD_YOLO'
+      ? (todInference?.confidence ?? signalConfidence)
+      : signalConfidence
+  );
+  const signalClassName = normalizeClassOrUnknown(
+    record.signalClass,
+    signalClass
+  );
+  const signalClassSafe = signalClassName === 'UNKNOWN' ? signalClass : signalClassName;
+  const todClass = normalizeClassOrUnknown(
+    record.todClass,
+    todInference?.className ?? 'UNKNOWN'
+  );
+  const todConfidence = toConfidencePercent(
+    record.todConfidence,
+    todInference?.confidence ?? 0
+  );
+
+  return {
+    selectedSource,
+    className,
+    confidence,
+    signalClass: signalClassSafe,
+    signalConfidence: toConfidencePercent(record.signalConfidence, signalConfidence),
+    todClass,
+    todConfidence,
+    agreement:
+      typeof record.agreement === 'boolean'
+        ? record.agreement
+        : todInference
+          ? todClass === signalClassSafe
+          : null,
+    policy: toStringOrEmpty(record.policy) || undefined,
+  };
+};
+
 const mapObject = (
   rawObject: unknown,
   fallbackId: string,
@@ -365,17 +599,17 @@ const mapObject = (
   const sizeRecord = toRecord(record.size ?? record.dimensions);
   const size = {
     width: clamp(
-      toNumber(sizeRecord.width, previousObject?.size.width ?? DEFAULT_SIZE.width),
+      toNumber(sizeRecord.width, previousObject?.size?.width ?? DEFAULT_SIZE.width),
       0.1,
       200
     ),
     height: clamp(
-      toNumber(sizeRecord.height, previousObject?.size.height ?? DEFAULT_SIZE.height),
+      toNumber(sizeRecord.height, previousObject?.size?.height ?? DEFAULT_SIZE.height),
       0.1,
       200
     ),
     length: clamp(
-      toNumber(sizeRecord.length, previousObject?.size.length ?? DEFAULT_SIZE.length),
+      toNumber(sizeRecord.length, previousObject?.size?.length ?? DEFAULT_SIZE.length),
       0.1,
       200
     ),
@@ -389,31 +623,69 @@ const mapObject = (
     inferredRisk
   );
   const uavInference = toRecord(record.uavInference ?? record.inference);
+  const signalInferenceRecord = toRecord(record.signalInference);
+  const todInference = mapTodInference(
+    record.todInference ?? record.visionInference ?? record.imageInference,
+    previousObject?.todInference
+  );
+  const combinedInference = mapCombinedInference(
+    record.combinedInference ?? record.fusedInference ?? record.aggregatedInference,
+    objectClass,
+    confidence,
+    todInference
+  );
   const uavThreshold = clamp(
     toConfidencePercent(
-      record.uavThreshold ?? uavInference.threshold ?? uavInference.decisionThreshold,
+      record.uavThreshold ??
+        uavInference.threshold ??
+        uavInference.decisionThreshold ??
+        signalInferenceRecord.uavThreshold,
       previousObject?.uavThreshold ?? 35
     ),
     1,
     99
   );
   const uavProbability = toConfidencePercent(
-    record.uavProbability ?? uavInference.probability ?? uavInference.score,
+    record.uavProbability ??
+      uavInference.probability ??
+      uavInference.score ??
+      signalInferenceRecord.uavProbability,
     previousObject?.uavProbability ?? 0
   );
   const uavDecision = normalizeUavDecision(
-    record.uavDecision ?? uavInference.decision ?? uavInference.label,
+    record.uavDecision ??
+      uavInference.decision ??
+      uavInference.label ??
+      signalInferenceRecord.uavDecision,
     uavProbability >= uavThreshold ? 'UAV' : 'NON_UAV'
+  );
+  const score = clamp(
+    toConfidencePercent(
+      record.trackScore ??
+        record.targetScore ??
+        record.radarScore ??
+        record.detectionScore ??
+        uavInference.trackScore ??
+        uavInference.score ??
+        toRecord(record.classification).score,
+      previousObject?.score ?? estimateRadarTrackScore(confidence, uavProbability, status)
+    ),
+    0,
+    100
   );
   const inferenceModelVersion =
     toStringOrEmpty(
       record.inferenceModelVersion ??
         uavInference.modelVersion ??
+        signalInferenceRecord.inferenceModelVersion ??
         toRecord(record.model).version
     ) || previousObject?.inferenceModelVersion;
   const inferenceLatencyMs = clamp(
     toNumber(
-      record.inferenceLatencyMs ?? uavInference.inferenceLatencyMs ?? uavInference.latencyMs,
+      record.inferenceLatencyMs ??
+        uavInference.inferenceLatencyMs ??
+        uavInference.latencyMs ??
+        signalInferenceRecord.inferenceLatencyMs,
       previousObject?.inferenceLatencyMs ?? 0
     ),
     0,
@@ -423,7 +695,7 @@ const mapObject = (
     0,
     Math.floor(
       toNumber(
-        record.featureWindowMs ?? uavInference.featureWindowMs,
+        record.featureWindowMs ?? uavInference.featureWindowMs ?? signalInferenceRecord.featureWindowMs,
         previousObject?.featureWindowMs ?? 0
       )
     )
@@ -496,6 +768,7 @@ const mapObject = (
     id,
     class: objectClass,
     confidence,
+    score,
     probabilities,
     position: { x, y, z },
     velocity: { x: velocityX, y: velocityY, z: velocityZ },
@@ -517,6 +790,14 @@ const mapObject = (
     inferenceModelVersion,
     featureWindowMs,
     inferenceLatencyMs,
+    signalInference: {
+      class: objectClass,
+      confidence,
+      probabilities,
+      inferenceModelVersion,
+    },
+    todInference,
+    combinedInference,
   };
 };
 

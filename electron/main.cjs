@@ -23,10 +23,22 @@ const isWslEnvironment = (() => {
 
 const disableGpuEnv = process.env.RADAR_ELECTRON_DISABLE_GPU;
 const shouldDisableGpuByDefault = isWslEnvironment;
+const forceDisableGpuOnWsl = isWslEnvironment;
 const shouldDisableGpu =
-  disableGpuEnv === undefined || disableGpuEnv === null || disableGpuEnv === ''
+  forceDisableGpuOnWsl ||
+  (disableGpuEnv === undefined || disableGpuEnv === null || disableGpuEnv === ''
     ? shouldDisableGpuByDefault
-    : isTruthyEnv(disableGpuEnv) && !isFalsyEnv(disableGpuEnv);
+    : isTruthyEnv(disableGpuEnv) && !isFalsyEnv(disableGpuEnv));
+const gpuDiagEnabled = !isFalsyEnv(process.env.RADAR_ELECTRON_GPU_DIAG);
+const gpuDiagVerbose = isTruthyEnv(process.env.RADAR_ELECTRON_GPU_DIAG_VERBOSE);
+const gpuDisableReason =
+  forceDisableGpuOnWsl
+    ? 'forced-wsl-policy'
+    : shouldDisableGpu && (disableGpuEnv === undefined || disableGpuEnv === null || disableGpuEnv === '')
+      ? (isWslEnvironment ? 'default-wsl-safety' : 'default')
+    : shouldDisableGpu
+      ? 'env:RADAR_ELECTRON_DISABLE_GPU'
+      : 'enabled';
 
 const ozonePlatformEnv = String(process.env.RADAR_ELECTRON_OZONE_PLATFORM || '').trim().toLowerCase();
 const preferredOzonePlatform = ozonePlatformEnv || (isWslEnvironment ? 'x11' : '');
@@ -41,9 +53,28 @@ if (shouldDisableGpu) {
   app.commandLine.appendSwitch('disable-gpu-compositing');
 }
 
+console.log('[ARGUS] electron gpu launch config', {
+  disabled: shouldDisableGpu,
+  disableReason: gpuDisableReason,
+  wsl: isWslEnvironment,
+  ozone: preferredOzonePlatform || '(auto)',
+  diagEnabled: gpuDiagEnabled,
+  diagVerbose: gpuDiagVerbose,
+});
+
 const DEFAULT_INFER_PORT = Number(process.env.RADAR_INFER_PORT || 8787);
 const DEFAULT_ARGUS_SOURCE_URL =
   process.env.RADAR_ARGUS_SOURCE_URL || 'http://127.0.0.1:8080/api/v1/radar/frame';
+const DEFAULT_TOD_DATA_DIR = '/tmp/argus-tod-decoded';
+const TOD_IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.bmp',
+  '.webp',
+  '.tif',
+  '.tiff',
+]);
 
 let mainWindow = null;
 let logViewerWindow = null;
@@ -93,6 +124,115 @@ const pushLog = (level, message) => {
   runtimeState.logs.push(entry);
   if (runtimeState.logs.length > 500) {
     runtimeState.logs.shift();
+  }
+};
+
+const logMain = (message, ...rest) => {
+  console.log(`[ARGUS] ${message}`, ...rest);
+};
+
+const summarizeGpuFeatureStatus = (featureStatus) => {
+  if (!featureStatus || typeof featureStatus !== 'object') {
+    return 'unknown';
+  }
+  const interestingKeys = [
+    'gpu_compositing',
+    'webgl',
+    'webgl2',
+    'accelerated_2d_canvas',
+    'metal',
+    'vulkan',
+  ];
+  return interestingKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(featureStatus, key))
+    .map((key) => `${key}:${String(featureStatus[key])}`)
+    .join(', ');
+};
+
+const formatGpuDeviceSummary = (gpuInfo) => {
+  if (!gpuInfo || typeof gpuInfo !== 'object') {
+    return 'unknown';
+  }
+
+  const devicesRaw = gpuInfo.gpuDevice;
+  const devices = Array.isArray(devicesRaw)
+    ? devicesRaw
+    : devicesRaw && typeof devicesRaw === 'object'
+      ? [devicesRaw]
+      : [];
+  if (devices.length === 0) {
+    return 'none';
+  }
+
+  return devices
+    .slice(0, 2)
+    .map((device) => {
+      if (!device || typeof device !== 'object') return 'unknown';
+      const vendor =
+        device.vendorString || device.vendor || device.vendorId || 'unknown-vendor';
+      const model =
+        device.deviceString || device.device || device.deviceId || 'unknown-device';
+      const active = device.active ? 'active' : 'inactive';
+      return `${vendor}/${model}/${active}`;
+    })
+    .join(' | ');
+};
+
+const logGpuDiagnostics = async (stage = 'startup') => {
+  if (!gpuDiagEnabled) return;
+
+  const commandHints = [];
+  if (forceDisableGpuOnWsl) {
+    commandHints.push('WSL policy active: GPU acceleration is forced OFF for stability.');
+  } else if (shouldDisableGpu) {
+    commandHints.push('GPU is disabled. Use RADAR_ELECTRON_DISABLE_GPU=0 to try HW acceleration.');
+  }
+  if (isWslEnvironment) {
+    commandHints.push('WSL detected. Preferred launch: RADAR_ELECTRON_OZONE_PLATFORM=x11');
+  }
+
+  let featureStatus = null;
+  try {
+    featureStatus = app.getGPUFeatureStatus();
+  } catch (error) {
+    pushLog('warn', `gpu feature status read failed (${stage}): ${error.message}`);
+  }
+
+  let gpuInfo = null;
+  try {
+    gpuInfo = await app.getGPUInfo(gpuDiagVerbose ? 'complete' : 'basic');
+  } catch (error) {
+    pushLog('warn', `gpu info read failed (${stage}): ${error.message}`);
+  }
+
+  const summary = {
+    stage,
+    disabled: shouldDisableGpu,
+    disableReason: gpuDisableReason,
+    wsl: isWslEnvironment,
+    ozone: preferredOzonePlatform || '(auto)',
+    features: summarizeGpuFeatureStatus(featureStatus),
+    devices: formatGpuDeviceSummary(gpuInfo),
+  };
+
+  const summaryText = JSON.stringify(summary);
+  pushLog('info', `gpu diagnostics: ${summaryText}`);
+  logMain(`gpu diagnostics (${stage})`, summary);
+
+  if (commandHints.length > 0) {
+    commandHints.forEach((hint) => {
+      pushLog('info', `gpu hint: ${hint}`);
+      logMain(`gpu hint: ${hint}`);
+    });
+  }
+
+  if (gpuDiagVerbose && gpuInfo) {
+    try {
+      const verbosePayload = JSON.stringify(gpuInfo);
+      pushLog('info', `gpu info (${stage}): ${verbosePayload.slice(0, 1500)}`);
+    } catch {
+      // ignore JSON serialization errors
+    }
   }
 };
 
@@ -239,6 +379,68 @@ const escapeCsvValue = (value) => {
   return stringValue;
 };
 
+const pad2 = (value) => String(value).padStart(2, '0');
+
+const formatTodObservedCode = (dateInput) => {
+  const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  if (Number.isNaN(date.getTime())) {
+    const now = new Date();
+    return `${pad2(now.getDate())}${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(
+      now.getSeconds()
+    )}`;
+  }
+  return `${pad2(date.getDate())}${pad2(date.getHours())}${pad2(date.getMinutes())}${pad2(
+    date.getSeconds()
+  )}`;
+};
+
+const extractObservedCodeFromName = (fileName, fallbackDate) => {
+  const baseName = path.parse(String(fileName || '')).name || '';
+  const ymdhms = baseName.match(/(?:19|20)\d{12}/);
+  if (ymdhms) {
+    return ymdhms[0].slice(6, 14);
+  }
+
+  const ddhhmmss = baseName.match(/(?<!\d)(\d{8})(?!\d)/);
+  if (ddhhmmss) {
+    const token = ddhhmmss[1];
+    const dd = Number(token.slice(0, 2));
+    const hh = Number(token.slice(2, 4));
+    const mm = Number(token.slice(4, 6));
+    const ss = Number(token.slice(6, 8));
+    if (dd >= 1 && dd <= 31 && hh <= 23 && mm <= 59 && ss <= 59) {
+      return token;
+    }
+  }
+
+  return formatTodObservedCode(fallbackDate);
+};
+
+const extractTodIdFromName = (fileName, fallbackIndex) => {
+  const baseName = path.parse(String(fileName || '')).name || '';
+  const explicit = baseName.match(/(TOD[-_A-Z0-9]+)/i);
+  if (explicit) {
+    return explicit[1].replace(/\s+/g, '').toUpperCase();
+  }
+  const compact = baseName.replace(/[^0-9A-Za-z_-]/g, '').toUpperCase();
+  if (compact) {
+    return compact.slice(0, 24);
+  }
+  return `TOD-${String(fallbackIndex + 1).padStart(4, '0')}`;
+};
+
+const resolveTodDataDirectory = (requestedDirectory) => {
+  const candidates = [
+    typeof requestedDirectory === 'string' ? requestedDirectory.trim() : '',
+    typeof runtimeConfig.todDataDir === 'string' ? runtimeConfig.todDataDir.trim() : '',
+    typeof process.env.RADAR_TOD_DATA_DIR === 'string' ? process.env.RADAR_TOD_DATA_DIR.trim() : '',
+    typeof runtimeConfig.todDecodeOutputDir === 'string' ? runtimeConfig.todDecodeOutputDir.trim() : '',
+    DEFAULT_TOD_DATA_DIR,
+  ].filter(Boolean);
+
+  return path.resolve(candidates[0]);
+};
+
 const countReplacementChars = (text) => {
   if (!text) return 0;
   const matches = text.match(/\uFFFD/g);
@@ -331,9 +533,22 @@ const loadRuntimeConfig = () => {
     pollIntervalMs: 100,
     requestTimeoutMs: 1000,
     uavThreshold: 35,
+    seqLen: 8,
+    trackResetGapMs: 10000,
     modelPath: '',
     activeModelId: 'heuristic-default',
+    todEnabled: false,
+    todModelPath: '',
+    todActiveModelId: 'tod-unset',
+    todConfThreshold: 0.25,
+    todIouThreshold: 0.45,
+    todPriorityConfidence: 65,
+    todDecodeCommand: '',
+    todDecodeTimeoutMs: 15000,
+    todDecodeOutputDir: DEFAULT_TOD_DATA_DIR,
+    todDataDir: DEFAULT_TOD_DATA_DIR,
     detectionMode: 'ACCURACY',
+    computeMode: 'CPU_ONLY',
     resourceMonitorIntervalMs: 1000,
   };
 
@@ -351,6 +566,25 @@ const loadRuntimeConfig = () => {
       ...normalizedParsed,
     };
     const detectionMode = merged.detectionMode === 'SPEED' ? 'SPEED' : 'ACCURACY';
+    const computeMode = merged.computeMode === 'AUTO' ? 'AUTO' : 'CPU_ONLY';
+    const seqLen = Number.isFinite(Number(merged.seqLen))
+      ? Math.min(256, Math.max(2, Math.floor(Number(merged.seqLen))))
+      : fallback.seqLen;
+    const trackResetGapMs = Number.isFinite(Number(merged.trackResetGapMs))
+      ? Math.max(1000, Math.floor(Number(merged.trackResetGapMs)))
+      : fallback.trackResetGapMs;
+    const todConfThreshold = Number.isFinite(Number(merged.todConfThreshold))
+      ? Math.min(0.99, Math.max(0.01, Number(merged.todConfThreshold)))
+      : fallback.todConfThreshold;
+    const todIouThreshold = Number.isFinite(Number(merged.todIouThreshold))
+      ? Math.min(0.99, Math.max(0.01, Number(merged.todIouThreshold)))
+      : fallback.todIouThreshold;
+    const todPriorityConfidence = Number.isFinite(Number(merged.todPriorityConfidence))
+      ? Math.min(99, Math.max(1, Number(merged.todPriorityConfidence)))
+      : fallback.todPriorityConfidence;
+    const todDecodeTimeoutMs = Number.isFinite(Number(merged.todDecodeTimeoutMs))
+      ? Math.max(1000, Math.floor(Number(merged.todDecodeTimeoutMs)))
+      : fallback.todDecodeTimeoutMs;
     const parsedResourceInterval = Number(merged.resourceMonitorIntervalMs);
     const hasPersistedInterval = Object.prototype.hasOwnProperty.call(
       normalizedParsed,
@@ -365,6 +599,30 @@ const loadRuntimeConfig = () => {
     return {
       ...merged,
       detectionMode,
+      computeMode,
+      seqLen,
+      trackResetGapMs,
+      todEnabled: Boolean(merged.todEnabled),
+      todConfThreshold,
+      todIouThreshold,
+      todPriorityConfidence,
+      todDecodeTimeoutMs,
+      todDecodeCommand: typeof merged.todDecodeCommand === 'string' ? merged.todDecodeCommand : '',
+      todDecodeOutputDir:
+        typeof merged.todDecodeOutputDir === 'string' && merged.todDecodeOutputDir.trim()
+          ? merged.todDecodeOutputDir
+          : fallback.todDecodeOutputDir,
+      todDataDir:
+        typeof merged.todDataDir === 'string' && merged.todDataDir.trim()
+          ? merged.todDataDir.trim()
+          : typeof merged.todDecodeOutputDir === 'string' && merged.todDecodeOutputDir.trim()
+            ? merged.todDecodeOutputDir.trim()
+            : fallback.todDataDir,
+      todModelPath: typeof merged.todModelPath === 'string' ? merged.todModelPath : '',
+      todActiveModelId:
+        typeof merged.todActiveModelId === 'string' && merged.todActiveModelId.trim()
+          ? merged.todActiveModelId.trim()
+          : fallback.todActiveModelId,
       resourceMonitorIntervalMs,
     };
   } catch (error) {
@@ -384,9 +642,22 @@ let runtimeConfig = {
   pollIntervalMs: 100,
   requestTimeoutMs: 1000,
   uavThreshold: 35,
+  seqLen: 8,
+  trackResetGapMs: 10000,
   modelPath: '',
   activeModelId: 'heuristic-default',
+  todEnabled: false,
+  todModelPath: '',
+  todActiveModelId: 'tod-unset',
+  todConfThreshold: 0.25,
+  todIouThreshold: 0.45,
+  todPriorityConfidence: 65,
+  todDecodeCommand: '',
+  todDecodeTimeoutMs: 15000,
+  todDecodeOutputDir: DEFAULT_TOD_DATA_DIR,
+  todDataDir: DEFAULT_TOD_DATA_DIR,
   detectionMode: 'ACCURACY',
+  computeMode: 'CPU_ONLY',
   resourceMonitorIntervalMs: 1000,
 };
 
@@ -471,21 +742,39 @@ const startInferenceService = () => {
 
   const launch = resolveInferCommand();
   pushLog('info', `start inference service: ${launch.command} ${launch.args.join(' ')}`);
+  const forceCpuMode = runtimeConfig.computeMode === 'CPU_ONLY';
+  const childEnv = {
+    ...process.env,
+    RADAR_INFER_PORT: String(runtimeConfig.inferPort),
+    RADAR_ARGUS_SOURCE_URL: String(runtimeConfig.argusSourceUrl),
+    RADAR_POLL_INTERVAL_MS: String(runtimeConfig.pollIntervalMs),
+    RADAR_REQUEST_TIMEOUT_MS: String(runtimeConfig.requestTimeoutMs),
+    RADAR_UAV_THRESHOLD: String(runtimeConfig.uavThreshold),
+    RADAR_SEQ_LEN: String(runtimeConfig.seqLen || 8),
+    RADAR_TRACK_RESET_GAP_MS: String(runtimeConfig.trackResetGapMs || 10000),
+    RADAR_MODEL_PATH: String(runtimeConfig.modelPath || ''),
+    RADAR_ACTIVE_MODEL_ID: String(runtimeConfig.activeModelId || 'heuristic-default'),
+    RADAR_TOD_ENABLED: runtimeConfig.todEnabled ? '1' : '0',
+    RADAR_TOD_MODEL_PATH: String(runtimeConfig.todModelPath || ''),
+    RADAR_TOD_ACTIVE_MODEL_ID: String(runtimeConfig.todActiveModelId || 'tod-unset'),
+    RADAR_TOD_CONF_THRESHOLD: String(runtimeConfig.todConfThreshold ?? 0.25),
+    RADAR_TOD_IOU_THRESHOLD: String(runtimeConfig.todIouThreshold ?? 0.45),
+    RADAR_TOD_PRIORITY_CONFIDENCE: String(runtimeConfig.todPriorityConfidence ?? 65),
+    RADAR_TOD_DECODE_COMMAND: String(runtimeConfig.todDecodeCommand || ''),
+    RADAR_TOD_DECODE_TIMEOUT_MS: String(runtimeConfig.todDecodeTimeoutMs ?? 15000),
+    RADAR_TOD_DECODE_OUTPUT_DIR: String(runtimeConfig.todDecodeOutputDir || DEFAULT_TOD_DATA_DIR),
+    RADAR_TOD_DATA_DIR: String(runtimeConfig.todDataDir || runtimeConfig.todDecodeOutputDir || DEFAULT_TOD_DATA_DIR),
+    RADAR_COMPUTE_MODE: String(runtimeConfig.computeMode || 'CPU_ONLY'),
+    RADAR_FORCE_CPU: forceCpuMode ? '1' : '0',
+    YOLO_DEVICE: forceCpuMode ? 'cpu' : String(process.env.YOLO_DEVICE || ''),
+    CUDA_VISIBLE_DEVICES: forceCpuMode ? '' : String(process.env.CUDA_VISIBLE_DEVICES || ''),
+  };
 
   let child;
   try {
     child = spawn(launch.command, launch.args, {
       cwd: launch.cwd,
-      env: {
-        ...process.env,
-        RADAR_INFER_PORT: String(runtimeConfig.inferPort),
-        RADAR_ARGUS_SOURCE_URL: String(runtimeConfig.argusSourceUrl),
-        RADAR_POLL_INTERVAL_MS: String(runtimeConfig.pollIntervalMs),
-        RADAR_REQUEST_TIMEOUT_MS: String(runtimeConfig.requestTimeoutMs),
-        RADAR_UAV_THRESHOLD: String(runtimeConfig.uavThreshold),
-        RADAR_MODEL_PATH: String(runtimeConfig.modelPath || ''),
-        RADAR_ACTIVE_MODEL_ID: String(runtimeConfig.activeModelId || 'heuristic-default'),
-      },
+      env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
@@ -593,7 +882,11 @@ const startResourceMonitor = () => {
     }
     runtimeState.resources.ramUsage = Number(sampleRamUsage().toFixed(1));
 
-    if (!gpuSamplingInFlight && Date.now() - lastGpuSampleAt >= 3000) {
+    const forceCpuMode = runtimeConfig.computeMode === 'CPU_ONLY';
+    if (forceCpuMode) {
+      runtimeState.resources.gpuUsage = 0;
+      runtimeState.resources.gpuAvailable = false;
+    } else if (!gpuSamplingInFlight && Date.now() - lastGpuSampleAt >= 3000) {
       gpuSamplingInFlight = true;
       lastGpuSampleAt = Date.now();
       try {
@@ -1136,6 +1429,116 @@ ipcMain.handle('runtime:pickModelPath', async (_event, options = {}) => {
   }
 });
 
+ipcMain.handle('runtime:pickTodFiles', async (_event, options = {}) => {
+  try {
+    const title =
+      typeof options.title === 'string' && options.title.trim()
+        ? options.title.trim()
+        : 'TOD 이미지 선택';
+    let defaultPath;
+    if (typeof options.defaultPath === 'string' && options.defaultPath.trim()) {
+      const raw = options.defaultPath.trim();
+      if (!/^https?:\/\//i.test(raw)) {
+        const normalized = path.resolve(raw);
+        const normalizedDir =
+          fs.existsSync(normalized) && fs.statSync(normalized).isDirectory()
+            ? normalized
+            : path.dirname(normalized);
+        if (fs.existsSync(normalizedDir)) {
+          defaultPath = normalizedDir;
+        }
+      }
+    }
+
+    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+      title,
+      defaultPath,
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        {
+          name: 'TOD Media',
+          extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp', 'tif', 'tiff'],
+        },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    });
+
+    return {
+      canceled: result.canceled,
+      paths: result.filePaths || [],
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    pushLog('warn', `tod file picker failed: ${message}`);
+    return {
+      canceled: true,
+      paths: [],
+      error: message,
+    };
+  }
+});
+
+ipcMain.handle('runtime:listTodEntries', async (_event, payload = {}) => {
+  const directory = resolveTodDataDirectory(payload.directory);
+
+  try {
+    if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
+      return {
+        ok: false,
+        directory,
+        entries: [],
+        error: `TOD 디렉터리를 찾을 수 없습니다: ${directory}`,
+      };
+    }
+
+    const entries = fs
+      .readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry, index) => {
+        const fileName = entry.name;
+        const ext = path.extname(fileName).toLowerCase();
+        if (!TOD_IMAGE_EXTENSIONS.has(ext)) {
+          return null;
+        }
+        try {
+          const mediaPath = path.join(directory, fileName);
+          const stat = fs.statSync(mediaPath);
+          const observedCode = extractObservedCodeFromName(fileName, stat.mtime);
+          const todId = extractTodIdFromName(fileName, index);
+          return {
+            id: `${fileName}-${Math.floor(stat.mtimeMs)}`,
+            fileName,
+            mediaPath,
+            todId,
+            observedCode,
+            observedAt: stat.mtime.toISOString(),
+            modifiedAtMs: Math.floor(stat.mtimeMs),
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.modifiedAtMs - a.modifiedAtMs)
+      .slice(0, 240);
+
+    return {
+      ok: true,
+      directory,
+      entries,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    pushLog('warn', `listTodEntries failed: ${message}`);
+    return {
+      ok: false,
+      directory,
+      entries: [],
+      error: message,
+    };
+  }
+});
+
 ipcMain.handle('runtime:pickDirectory', async (_event, options = {}) => {
   try {
     const title =
@@ -1170,6 +1573,82 @@ ipcMain.handle('runtime:pickDirectory', async (_event, options = {}) => {
     return {
       canceled: true,
       path: null,
+      error: message,
+    };
+  }
+});
+
+ipcMain.handle('runtime:inferTodPath', async (_event, payload = {}) => {
+  try {
+    const mediaPath =
+      typeof payload.mediaPath === 'string' && payload.mediaPath.trim() ? payload.mediaPath.trim() : '';
+    if (!mediaPath) {
+      return {
+        ok: false,
+        error: 'mediaPath is required',
+      };
+    }
+
+    const trackId =
+      typeof payload.trackId === 'string' && payload.trackId.trim() ? payload.trackId.trim() : '';
+    const timeoutMs = Number(payload.timeoutMs);
+    const effectiveTimeoutMs =
+      Number.isFinite(timeoutMs) && timeoutMs >= 1000
+        ? Math.floor(timeoutMs)
+        : Math.max(4000, Number(runtimeConfig.requestTimeoutMs || 1000) * 8);
+
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => {
+      controller.abort(new Error('tod inference timeout'));
+    }, effectiveTimeoutMs);
+
+    try {
+      const response = await fetch(`${inferFrameBaseUrl()}/api/v1/tod/infer/path`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mediaPath,
+          trackId,
+        }),
+        signal: controller.signal,
+      });
+
+      const rawText = await response.text();
+      let decoded = null;
+      if (rawText) {
+        try {
+          decoded = JSON.parse(rawText);
+        } catch {
+          decoded = null;
+        }
+      }
+
+      if (!response.ok) {
+        const detail =
+          decoded && typeof decoded === 'object'
+            ? decoded.detail || decoded.error || JSON.stringify(decoded)
+            : rawText;
+        return {
+          ok: false,
+          status: response.status,
+          error: detail || `HTTP ${response.status}`,
+        };
+      }
+
+      return {
+        ok: true,
+        result: decoded && typeof decoded === 'object' ? decoded : {},
+      };
+    } finally {
+      clearTimeout(abortTimer);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    pushLog('warn', `tod inference request failed: ${message}`);
+    return {
+      ok: false,
       error: message,
     };
   }
@@ -1232,7 +1711,43 @@ ipcMain.handle('runtime:updateConfig', async (_event, patch = {}) => {
   };
 
   runtimeConfig.detectionMode = runtimeConfig.detectionMode === 'SPEED' ? 'SPEED' : 'ACCURACY';
+  runtimeConfig.computeMode = runtimeConfig.computeMode === 'AUTO' ? 'AUTO' : 'CPU_ONLY';
+  runtimeConfig.seqLen = Number.isFinite(Number(runtimeConfig.seqLen))
+    ? Math.min(256, Math.max(2, Math.floor(Number(runtimeConfig.seqLen))))
+    : 8;
+  runtimeConfig.trackResetGapMs = Number.isFinite(Number(runtimeConfig.trackResetGapMs))
+    ? Math.max(1000, Math.floor(Number(runtimeConfig.trackResetGapMs)))
+    : 10000;
+  runtimeConfig.todEnabled = Boolean(runtimeConfig.todEnabled);
+  runtimeConfig.todConfThreshold = Number.isFinite(Number(runtimeConfig.todConfThreshold))
+    ? Math.min(0.99, Math.max(0.01, Number(runtimeConfig.todConfThreshold)))
+    : 0.25;
+  runtimeConfig.todIouThreshold = Number.isFinite(Number(runtimeConfig.todIouThreshold))
+    ? Math.min(0.99, Math.max(0.01, Number(runtimeConfig.todIouThreshold)))
+    : 0.45;
+  runtimeConfig.todPriorityConfidence = Number.isFinite(Number(runtimeConfig.todPriorityConfidence))
+    ? Math.min(99, Math.max(1, Number(runtimeConfig.todPriorityConfidence)))
+    : 65;
+  runtimeConfig.todDecodeTimeoutMs = Number.isFinite(Number(runtimeConfig.todDecodeTimeoutMs))
+    ? Math.max(1000, Math.floor(Number(runtimeConfig.todDecodeTimeoutMs)))
+    : 15000;
+  runtimeConfig.todModelPath = typeof runtimeConfig.todModelPath === 'string' ? runtimeConfig.todModelPath : '';
+  runtimeConfig.todDecodeCommand =
+    typeof runtimeConfig.todDecodeCommand === 'string' ? runtimeConfig.todDecodeCommand : '';
+  runtimeConfig.todDecodeOutputDir =
+    typeof runtimeConfig.todDecodeOutputDir === 'string' && runtimeConfig.todDecodeOutputDir.trim()
+      ? runtimeConfig.todDecodeOutputDir
+      : DEFAULT_TOD_DATA_DIR;
+  runtimeConfig.todDataDir =
+    typeof runtimeConfig.todDataDir === 'string' && runtimeConfig.todDataDir.trim()
+      ? runtimeConfig.todDataDir.trim()
+      : runtimeConfig.todDecodeOutputDir;
+  runtimeConfig.todActiveModelId =
+    typeof runtimeConfig.todActiveModelId === 'string' && runtimeConfig.todActiveModelId.trim()
+      ? runtimeConfig.todActiveModelId.trim()
+      : 'tod-unset';
   const hasDetectionModePatch = Object.prototype.hasOwnProperty.call(patch, 'detectionMode');
+  const hasComputeModePatch = Object.prototype.hasOwnProperty.call(patch, 'computeMode');
   const hasIntervalPatch = Object.prototype.hasOwnProperty.call(patch, 'resourceMonitorIntervalMs');
   const parsedInterval = Number(runtimeConfig.resourceMonitorIntervalMs);
   const isValidInterval = Number.isFinite(parsedInterval) && parsedInterval >= 1000;
@@ -1264,10 +1779,35 @@ ipcMain.handle('runtime:updateConfig', async (_event, patch = {}) => {
       previousConfig.requestTimeoutMs !== runtimeConfig.requestTimeoutMs) ||
     (Object.prototype.hasOwnProperty.call(patch, 'uavThreshold') &&
       previousConfig.uavThreshold !== runtimeConfig.uavThreshold) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'seqLen') &&
+      previousConfig.seqLen !== runtimeConfig.seqLen) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'trackResetGapMs') &&
+      previousConfig.trackResetGapMs !== runtimeConfig.trackResetGapMs) ||
     (Object.prototype.hasOwnProperty.call(patch, 'modelPath') &&
       previousConfig.modelPath !== runtimeConfig.modelPath) ||
     (Object.prototype.hasOwnProperty.call(patch, 'activeModelId') &&
-      previousConfig.activeModelId !== runtimeConfig.activeModelId);
+      previousConfig.activeModelId !== runtimeConfig.activeModelId) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todEnabled') &&
+      previousConfig.todEnabled !== runtimeConfig.todEnabled) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todModelPath') &&
+      previousConfig.todModelPath !== runtimeConfig.todModelPath) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todActiveModelId') &&
+      previousConfig.todActiveModelId !== runtimeConfig.todActiveModelId) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todConfThreshold') &&
+      previousConfig.todConfThreshold !== runtimeConfig.todConfThreshold) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todIouThreshold') &&
+      previousConfig.todIouThreshold !== runtimeConfig.todIouThreshold) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todPriorityConfidence') &&
+      previousConfig.todPriorityConfidence !== runtimeConfig.todPriorityConfidence) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todDecodeCommand') &&
+      previousConfig.todDecodeCommand !== runtimeConfig.todDecodeCommand) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todDecodeTimeoutMs') &&
+      previousConfig.todDecodeTimeoutMs !== runtimeConfig.todDecodeTimeoutMs) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todDecodeOutputDir') &&
+      previousConfig.todDecodeOutputDir !== runtimeConfig.todDecodeOutputDir) ||
+    (Object.prototype.hasOwnProperty.call(patch, 'todDataDir') &&
+      previousConfig.todDataDir !== runtimeConfig.todDataDir) ||
+    (hasComputeModePatch && previousConfig.computeMode !== runtimeConfig.computeMode);
 
   if (shouldRestartInfer) {
     startInferenceService();
@@ -1275,7 +1815,8 @@ ipcMain.handle('runtime:updateConfig', async (_event, patch = {}) => {
 
   if (
     hasIntervalPatch ||
-    hasDetectionModePatch
+    hasDetectionModePatch ||
+    hasComputeModePatch
   ) {
     startResourceMonitor();
   }
@@ -1291,10 +1832,24 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   runtimeConfig = loadRuntimeConfig();
   shutdownRequested = false;
+  await logGpuDiagnostics('ready');
   await createWindow();
   startInferenceService();
   startHealthMonitor();
   startResourceMonitor();
+});
+
+app.on('gpu-info-update', () => {
+  void logGpuDiagnostics('gpu-info-update');
+});
+
+app.on('child-process-gone', (_event, details) => {
+  if (!details || details.type !== 'GPU') return;
+  const reason = details.reason || 'unknown';
+  const exitCode = Number.isFinite(details.exitCode) ? details.exitCode : 'n/a';
+  const message = `gpu process gone: reason=${reason}, exitCode=${exitCode}`;
+  pushLog('warn', message);
+  logMain(message);
 });
 
 app.on('window-all-closed', () => {

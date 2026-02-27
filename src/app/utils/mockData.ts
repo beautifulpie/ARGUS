@@ -111,6 +111,21 @@ const estimateUavProbability = (
   return clamp(score, 1, 99);
 };
 
+const computeRadarTrackScore = (
+  confidence: number,
+  uavProbability: number,
+  status: ObjectStatus
+): number => {
+  const statusBias: Record<ObjectStatus, number> = {
+    STABLE: 8,
+    TRACKING: 4,
+    NEW: 1,
+    CANDIDATE: -10,
+    LOST: -18,
+  };
+  return clamp(confidence * 0.62 + uavProbability * 0.38 + statusBias[status], 1, 99);
+};
+
 const sampleSpeedForClass = (objectClass: ObjectClass, previousSpeed?: number): number => {
   const profile = SPEED_PROFILE_MPS[objectClass];
   if (previousSpeed === undefined) {
@@ -250,16 +265,20 @@ export function generateDetectedObject(existing?: DetectedObject, deltaSeconds =
     const confidence = Math.max(50, Math.min(99, existing.confidence + (Math.random() - 0.5) * 5));
     const probabilities = generateProbabilities(existing.class, confidence);
 
+    const nextStatus = existing.status === 'CANDIDATE' ? ('CANDIDATE' as ObjectStatus) : ('TRACKING' as ObjectStatus);
+    const score = computeRadarTrackScore(confidence, uavProbability, nextStatus);
+
     return {
       ...existing,
       confidence,
+      score,
       probabilities,
       position,
       velocity,
       speed,
       distance,
       trackingDuration: existing.trackingDuration + timeScale,
-      status: existing.status === 'CANDIDATE' ? 'CANDIDATE' : 'TRACKING' as ObjectStatus,
+      status: nextStatus,
       timestamp: new Date(),
       trackHistory,
       predictedPath,
@@ -333,10 +352,14 @@ export function generateDetectedObject(existing?: DetectedObject, deltaSeconds =
     )
   );
 
+  const status: ObjectStatus = 'NEW';
+  const score = computeRadarTrackScore(confidence, uavProbability, status);
+
   return {
     id,
     class: objectClass,
     confidence,
+    score,
     probabilities,
     position,
     velocity,
@@ -344,7 +367,7 @@ export function generateDetectedObject(existing?: DetectedObject, deltaSeconds =
     size,
     distance,
     trackingDuration: 0,
-    status: 'NEW' as ObjectStatus,
+    status,
     riskLevel,
     timestamp: new Date(),
     trackHistory: [{ x: position.x, y: position.y }],

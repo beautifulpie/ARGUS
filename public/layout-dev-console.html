@@ -244,7 +244,7 @@
         </div>
 
         <div class="section">
-          <div class="section-title">해상도 시뮬레이터</div>
+          <div class="section-title">해상도 설정</div>
           <div class="resolution-grid">
             <span class="label">프리셋</span>
             <select id="resolutionPreset" class="resolution-select resolution-preset-select"></select>
@@ -478,7 +478,7 @@
 
       const applyResolutionToMainWindow = async (width, height) => {
         if (typeof runtime?.setMainWindowSize !== "function") {
-          renderResolutionStatus("해상도 시뮬레이터는 Electron 환경에서만 동작합니다.");
+          renderResolutionStatus("해상도 설정은 Electron 환경에서만 동작합니다.");
           return;
         }
         try {

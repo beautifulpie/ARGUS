@@ -110,6 +110,7 @@ export function StatusBar({
 }: StatusBarProps) {
   const displayedFps = Math.max(0, (status.measuredFps ?? status.fps) * 10);
   const statusFontScale = layoutDevConfig.statusFontScale;
+  const isCompactStatus = statusFontScale <= 0.9;
   const scaledPx = (base: number) => `${(base * statusFontScale).toFixed(1)}px`;
   const scaledRem = (base: number) => `${(base * statusFontScale).toFixed(3)}rem`;
 
@@ -183,7 +184,7 @@ export function StatusBar({
   const statusBarPaddingY = `${Math.max(4, Math.round(8 * statusFontScale))}px`;
   const logoWidthPx = Math.max(64, Math.round(98 * statusFontScale));
   const logoHeightPx = Math.max(52, Math.round(80 * statusFontScale));
-  const statusColumnsTemplate = `minmax(280px, ${layoutDevConfig.statusSystemFr}fr) minmax(0, ${layoutDevConfig.statusPerformanceFr}fr) minmax(360px, ${layoutDevConfig.statusControlsFr}fr)`;
+  const statusColumnsTemplate = `minmax(${isCompactStatus ? 236 : 280}px, ${layoutDevConfig.statusSystemFr}fr) minmax(0, ${layoutDevConfig.statusPerformanceFr}fr) minmax(${isCompactStatus ? 304 : 360}px, ${layoutDevConfig.statusControlsFr}fr)`;
 
   return (
     <div
@@ -326,7 +327,7 @@ export function StatusBar({
           </div>
         </section>
 
-        <section className="argus-status-card rounded border border-cyan-950/60 bg-[#0c1219] px-3 min-w-[360px]" style={{ paddingTop: statusCardPaddingY, paddingBottom: statusCardPaddingY }}>
+        <section className="argus-status-card rounded border border-cyan-950/60 bg-[#0c1219] px-3 min-w-[304px]" style={{ paddingTop: statusCardPaddingY, paddingBottom: statusCardPaddingY }}>
           <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500 mb-1.5" style={{ fontSize: scaledPx(10) }}>Controls</p>
           <div className="argus-controls-grid grid grid-cols-4 gap-2">
             <button
@@ -344,7 +345,7 @@ export function StatusBar({
               style={{ height: `${layoutDevConfig.controlButtonHeight}px`, fontSize: scaledPx(14) }}
             >
               <Target className="w-4 h-4" />
-              <span>AI 자동 추적</span>
+              <span>{isCompactStatus ? 'AI 추적' : 'AI 자동 추적'}</span>
             </button>
 
             <button
@@ -353,7 +354,7 @@ export function StatusBar({
               style={{ height: `${layoutDevConfig.controlButtonHeight}px`, fontSize: scaledPx(14) }}
             >
               <FileText className="w-4 h-4" />
-              <span>로그 분석</span>
+              <span>{isCompactStatus ? '로그' : '로그 분석'}</span>
             </button>
 
             <button

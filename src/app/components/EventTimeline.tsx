@@ -57,6 +57,7 @@ export function EventTimeline({
 }: EventTimelineProps) {
   const [selectedFilter, setSelectedFilter] = useState<EventFilter>('ALL');
   const timelineScale = layoutDevConfig.timelineFontScale;
+  const isCompactTimeline = timelineScale <= 0.9;
   const scaledPx = (base: number) => `${(base * timelineScale).toFixed(1)}px`;
   const scaledRem = (base: number) => `${(base * timelineScale).toFixed(3)}rem`;
 
@@ -190,10 +191,10 @@ export function EventTimeline({
             className="argus-clear-timeline-button h-8 rounded border border-slate-700/80 bg-[#101725] px-2.5 text-xs font-semibold uppercase tracking-[0.08em] text-slate-200 transition-colors whitespace-nowrap hover:bg-[#1a2535] disabled:cursor-not-allowed disabled:opacity-45"
             style={{ fontSize: scaledPx(12) }}
           >
-            타임라인 지우기
+            {isCompactTimeline ? '지우기' : '타임라인 지우기'}
           </button>
           <label className="text-xs text-slate-500 uppercase tracking-[0.1em] whitespace-nowrap" style={{ fontSize: scaledPx(12) }}>
-            기체 필터
+            {isCompactTimeline ? '필터' : '기체 필터'}
           </label>
           <select
             value={selectedFilter}

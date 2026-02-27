@@ -5,6 +5,7 @@ import { SelectedTargetPanel } from './components/SelectedTargetPanel';
 import { ObjectListTable } from './components/ObjectListTable';
 import { EventTimeline } from './components/EventTimeline';
 import { AutoTrackingDialog } from './components/AutoTrackingDialog';
+import { TodDataDialog } from './components/TodDataDialog';
 import { DeveloperAccessDialog } from './components/DeveloperAccessDialog';
 import {
   SettingsDialog,
@@ -28,10 +29,12 @@ import {
   readLayoutDevConfig,
 } from './layoutDevConfig';
 import {
+  CombinedInferenceResult,
   TimelineEvent,
   SystemStatus,
   DetectedObject,
   ObjectClass,
+  TodInferenceResult,
 } from './types';
 
 import { CandidateTracksPanel } from './components/CandidateTracksPanel';
@@ -40,6 +43,7 @@ const MAX_EVENT_LOGS = 400;
 const SETTINGS_STORAGE_KEY = 'argus.console.settings.v1';
 const MAP_CALIBRATION_STORAGE_KEY = 'argus.map.calibration.v1';
 const DEV_MODEL_PATH_STORAGE_KEY = 'argus.developer.model-path.v1';
+const SELECTED_TRACK_LOSS_GRACE_MS = 7000;
 
 const DEV_CREDENTIAL_HASH = {
   id: '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918',
@@ -59,6 +63,12 @@ interface TimelineCsvLogEntry {
   message: string;
   objectId?: string;
   objectClass?: string;
+}
+
+interface TodApplyPayload {
+  trackId: string;
+  todInference: TodInferenceResult;
+  combinedInference: CombinedInferenceResult;
 }
 
 interface RadarRuntimeBridge {
@@ -88,6 +98,7 @@ const DEFAULT_CONSOLE_SETTINGS: ConsoleSettings = {
   positionCode: 'ARGUS-HQ',
   modelPath: '',
   detectionMode: 'ACCURACY',
+  computeMode: 'CPU_ONLY',
   mapLabelLevel: 'EMD',
   mapTheme: 'DARK',
   showUtmGrid: true,
@@ -180,6 +191,10 @@ const readInitialSettings = (): ConsoleSettings => {
           parsed.detectionMode === 'SPEED' || parsed.detectionMode === 'ACCURACY'
             ? parsed.detectionMode
             : loaded.detectionMode,
+        computeMode:
+          parsed.computeMode === 'AUTO' || parsed.computeMode === 'CPU_ONLY'
+            ? parsed.computeMode
+            : loaded.computeMode,
         mapLabelLevel: normalizeMapLabelLevel(
           parsed.mapLabelLevel,
           parsedRecord.mapLabelScale,
@@ -380,6 +395,7 @@ function App() {
   const [previewTheme, setPreviewTheme] = useState<ConsoleSettings['mapTheme'] | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAutoTrackingOpen, setIsAutoTrackingOpen] = useState(false);
+  const [isTodDialogOpen, setIsTodDialogOpen] = useState(false);
   const [isAutoTrackingEnabled, setIsAutoTrackingEnabled] = useState(false);
   const [isDeveloperAuthOpen, setIsDeveloperAuthOpen] = useState(false);
   const [isDeveloperAuthPending, setIsDeveloperAuthPending] = useState(false);
@@ -389,6 +405,9 @@ function App() {
   const [objects, setObjects] = useState<DetectedObject[]>([]);
   const [frozenSnapshotObjects, setFrozenSnapshotObjects] = useState<DetectedObject[] | null>(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [selectedObjectGraceSnapshot, setSelectedObjectGraceSnapshot] =
+    useState<DetectedObject | null>(null);
+  const [selectedObjectGraceRemainingMs, setSelectedObjectGraceRemainingMs] = useState(0);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus>(() => 
     generateSystemStatus(false, 0)
@@ -397,6 +416,7 @@ function App() {
   const trackClassByIdRef = useRef<Map<string, ObjectClass>>(new Map());
   const argusErrorLoggedRef = useRef(false);
   const previousDetectionModeRef = useRef(settings.detectionMode);
+  const previousComputeModeRef = useRef(settings.computeMode);
   const runtimeResourcesRef = useRef<RuntimeResourceMetrics | null>(null);
   const pendingTimelineLogEventsRef = useRef<TimelineEvent[]>([]);
   const dataUpdateTimestampsRef = useRef<number[]>([]);
@@ -408,6 +428,21 @@ function App() {
   const isLiveRef = useRef(isLive);
   const frozenObjectsRef = useRef<DetectedObject[] | null>(null);
   const logoSecretTapRef = useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
+  const selectedObjectGraceTimeoutRef = useRef<number | null>(null);
+  const selectedObjectGraceTickerRef = useRef<number | null>(null);
+  const selectedObjectMissingSinceRef = useRef<number | null>(null);
+  const selectedObjectLatestRef = useRef<DetectedObject | null>(null);
+
+  const clearSelectedObjectGraceTimers = useCallback(() => {
+    if (selectedObjectGraceTimeoutRef.current !== null) {
+      window.clearTimeout(selectedObjectGraceTimeoutRef.current);
+      selectedObjectGraceTimeoutRef.current = null;
+    }
+    if (selectedObjectGraceTickerRef.current !== null) {
+      window.clearInterval(selectedObjectGraceTickerRef.current);
+      selectedObjectGraceTickerRef.current = null;
+    }
+  }, []);
 
   const mergeRuntimeResources = useCallback((status: SystemStatus, fallback?: SystemStatus): SystemStatus => {
     const runtimeResources = runtimeResourcesRef.current;
@@ -495,6 +530,12 @@ function App() {
   useEffect(() => {
     isLiveRef.current = isLive;
   }, [isLive]);
+
+  useEffect(() => {
+    return () => {
+      clearSelectedObjectGraceTimers();
+    };
+  }, [clearSelectedObjectGraceTimers]);
 
   useEffect(() => {
     mockTickCounterRef.current = 0;
@@ -799,11 +840,12 @@ function App() {
     if (runtime && typeof runtime.updateConfig === 'function') {
       void runtime.updateConfig({
         detectionMode: settings.detectionMode,
+        computeMode: settings.computeMode,
         resourceMonitorIntervalMs: settings.detectionMode === 'SPEED' ? 5000 : 1000,
         modelPath: settings.modelPath.trim(),
       });
     }
-  }, [settings.detectionMode, settings.modelPath]);
+  }, [settings.computeMode, settings.detectionMode, settings.modelPath]);
 
   useEffect(() => {
     if (previousDetectionModeRef.current === settings.detectionMode) {
@@ -813,6 +855,15 @@ function App() {
     appendEvents([generateEvent('INFO', `탐지 모드 변경: ${modeLabel}`)]);
     previousDetectionModeRef.current = settings.detectionMode;
   }, [settings.detectionMode, appendEvents]);
+
+  useEffect(() => {
+    if (previousComputeModeRef.current === settings.computeMode) {
+      return;
+    }
+    const modeLabel = settings.computeMode === 'CPU_ONLY' ? 'CPU 전용' : '자동';
+    appendEvents([generateEvent('INFO', `연산 모드 변경: ${modeLabel}`)]);
+    previousComputeModeRef.current = settings.computeMode;
+  }, [settings.computeMode, appendEvents]);
 
   // Real-time simulation when live
   useEffect(() => {
@@ -1005,14 +1056,95 @@ function App() {
 
   useEffect(() => {
     if (!selectedObjectId) {
+      setIsTodDialogOpen(false);
+      selectedObjectLatestRef.current = null;
+      selectedObjectMissingSinceRef.current = null;
+      setSelectedObjectGraceSnapshot(null);
+      setSelectedObjectGraceRemainingMs(0);
+      clearSelectedObjectGraceTimers();
       return;
     }
 
-    const stillExists = visibleObjects.some((obj) => obj.id === selectedObjectId);
-    if (!stillExists) {
-      setSelectedObjectId(null);
+    const liveSelectedObject =
+      visibleObjects.find((obj) => obj.id === selectedObjectId) ?? null;
+
+    if (liveSelectedObject) {
+      selectedObjectLatestRef.current = liveSelectedObject;
+      selectedObjectMissingSinceRef.current = null;
+      if (selectedObjectGraceSnapshot) {
+        setSelectedObjectGraceSnapshot(null);
+      }
+      if (selectedObjectGraceRemainingMs !== 0) {
+        setSelectedObjectGraceRemainingMs(0);
+      }
+      clearSelectedObjectGraceTimers();
+      return;
     }
-  }, [visibleObjects, selectedObjectId]);
+
+    const latest = selectedObjectLatestRef.current;
+    if (!latest || latest.id !== selectedObjectId) {
+      selectedObjectLatestRef.current = null;
+      selectedObjectMissingSinceRef.current = null;
+      setSelectedObjectGraceSnapshot(null);
+      setSelectedObjectGraceRemainingMs(0);
+      clearSelectedObjectGraceTimers();
+      setSelectedObjectId(null);
+      setIsTodDialogOpen(false);
+      return;
+    }
+
+    if (selectedObjectGraceTimeoutRef.current !== null) {
+      return;
+    }
+
+    setSelectedObjectGraceSnapshot(latest);
+    selectedObjectMissingSinceRef.current = Date.now();
+    setSelectedObjectGraceRemainingMs(SELECTED_TRACK_LOSS_GRACE_MS);
+
+    selectedObjectGraceTickerRef.current = window.setInterval(() => {
+      const missingSince = selectedObjectMissingSinceRef.current ?? Date.now();
+      const remaining = Math.max(
+        0,
+        SELECTED_TRACK_LOSS_GRACE_MS - (Date.now() - missingSince)
+      );
+      setSelectedObjectGraceRemainingMs(remaining);
+    }, 200);
+
+    const pendingObjectId = selectedObjectId;
+    selectedObjectGraceTimeoutRef.current = window.setTimeout(() => {
+      clearSelectedObjectGraceTimers();
+      selectedObjectMissingSinceRef.current = null;
+      setSelectedObjectGraceSnapshot((prev) =>
+        prev && prev.id === pendingObjectId ? null : prev
+      );
+      setSelectedObjectGraceRemainingMs(0);
+      setSelectedObjectId((prev) => (prev === pendingObjectId ? null : prev));
+      setIsTodDialogOpen(false);
+      if (selectedObjectLatestRef.current?.id === pendingObjectId) {
+        selectedObjectLatestRef.current = null;
+      }
+    }, SELECTED_TRACK_LOSS_GRACE_MS);
+  }, [
+    clearSelectedObjectGraceTimers,
+    selectedObjectGraceRemainingMs,
+    selectedObjectGraceSnapshot,
+    selectedObjectId,
+    visibleObjects,
+  ]);
+
+  const selectedObject = (() => {
+    const liveSelectedObject =
+      selectedObjectId ? visibleObjects.find((obj) => obj.id === selectedObjectId) ?? null : null;
+    if (liveSelectedObject) return liveSelectedObject;
+    if (
+      selectedObjectId &&
+      selectedObjectGraceSnapshot &&
+      selectedObjectGraceSnapshot.id === selectedObjectId
+    ) {
+      return selectedObjectGraceSnapshot;
+    }
+    return null;
+  })();
 
   const handleToggleLive = useCallback(() => {
     setIsLive((prev) => {
@@ -1150,6 +1282,15 @@ function App() {
     setIsSettingsOpen(true);
   }, []);
 
+  const handleOpenTodDialog = useCallback(() => {
+    if (!selectedObjectId) return;
+    setIsTodDialogOpen(true);
+  }, [selectedObjectId]);
+
+  const handleCloseTodDialog = useCallback(() => {
+    setIsTodDialogOpen(false);
+  }, []);
+
   const handleCloseSettings = useCallback(() => {
     setPreviewTheme(null);
     setIsSettingsOpen(false);
@@ -1186,7 +1327,33 @@ function App() {
     });
   }, []);
 
-  const selectedObject = visibleObjects.find(obj => obj.id === selectedObjectId) || null;
+  const handleApplyTodResult = useCallback(
+    (payload: TodApplyPayload) => {
+      const { trackId, todInference, combinedInference } = payload;
+      const applyToObject = (obj: DetectedObject): DetectedObject =>
+        obj.id === trackId
+          ? {
+              ...obj,
+              todInference,
+              combinedInference,
+            }
+          : obj;
+
+      setObjects((prev) => prev.map(applyToObject));
+      setFrozenSnapshotObjects((prev) => (prev ? prev.map(applyToObject) : prev));
+
+      appendEvents([
+        generateEvent(
+          'INFO',
+          `TOD 분석 결과 적용 (${trackId}) · ${combinedInference.selectedSource} ${combinedInference.className} ${combinedInference.confidence.toFixed(1)}%`,
+          trackId,
+          combinedInference.className === 'UNKNOWN' ? undefined : combinedInference.className
+        ),
+      ]);
+    },
+    [appendEvents]
+  );
+
   const effectiveTheme = previewTheme ?? settings.mapTheme;
   const isLightTheme = effectiveTheme === 'LIGHT';
   const threatCount = visibleObjects.filter(
@@ -1206,15 +1373,15 @@ function App() {
   );
 
   const effectiveLayoutDevConfig = useMemo<LayoutDevConfig>(() => {
-    const compactBias = isHdViewport ? 0.78 : isHdPlusViewport ? 0.88 : 1;
+    const compactBias = isHdViewport ? 0.78 : isHdPlusViewport ? 0.84 : 1;
     const compactScale = clamp((0.82 + responsiveDensityScale * 0.18) * compactBias, 0.68, 1);
     const typographyScale = clamp(
-      compactScale * (isHdViewport ? 0.94 : isHdPlusViewport ? 0.97 : 1),
+      compactScale * (isHdViewport ? 0.94 : isHdPlusViewport ? 0.94 : 1),
       0.64,
       1
     );
     const panelScale = clamp(
-      compactScale * (isHdViewport ? 0.9 : isHdPlusViewport ? 0.95 : 1),
+      compactScale * (isHdViewport ? 0.9 : isHdPlusViewport ? 0.92 : 1),
       0.62,
       1
     );
@@ -1262,26 +1429,26 @@ function App() {
       rightMinPx = Math.max(320, gridWidth - leftMinPx);
     }
 
-    const rowCompactScale = isHdHeight ? 0.78 : isHdPlusHeight ? 0.88 : 1;
+    const rowCompactScale = isHdHeight ? 0.66 : isHdPlusHeight ? 0.78 : 1;
     const topTarget = Math.max(
-      isHdHeight ? 190 : 220,
+      isHdHeight ? 170 : isHdPlusHeight ? 206 : 220,
       Math.round(layoutDevConfig.topRowPx * rowCompactScale)
     );
     const trackedTarget = Math.max(
-      isHdHeight ? 68 : 72,
+      isHdHeight ? 60 : isHdPlusHeight ? 66 : 72,
       Math.round(layoutDevConfig.trackedRowMinPx * rowCompactScale)
     );
     const bottomTarget = Math.max(
-      isHdHeight ? 112 : 120,
+      isHdHeight ? 96 : isHdPlusHeight ? 108 : 120,
       Math.round(layoutDevConfig.bottomRowPx * rowCompactScale)
     );
 
-    const softMinTop = isHdHeight ? 210 : isHdPlusHeight ? 250 : 340;
-    const softMinTracked = isHdHeight ? 78 : isHdPlusHeight ? 90 : 115;
-    const softMinBottom = isHdHeight ? 130 : isHdPlusHeight ? 152 : 190;
-    const hardMinTop = isHdHeight ? 176 : 220;
-    const hardMinTracked = isHdHeight ? 64 : 72;
-    const hardMinBottom = isHdHeight ? 104 : 120;
+    const softMinTop = isHdHeight ? 190 : isHdPlusHeight ? 230 : 340;
+    const softMinTracked = isHdHeight ? 70 : isHdPlusHeight ? 84 : 115;
+    const softMinBottom = isHdHeight ? 118 : isHdPlusHeight ? 142 : 190;
+    const hardMinTop = isHdHeight ? 160 : isHdPlusHeight ? 196 : 220;
+    const hardMinTracked = isHdHeight ? 56 : isHdPlusHeight ? 64 : 72;
+    const hardMinBottom = isHdHeight ? 92 : isHdPlusHeight ? 104 : 120;
 
     let topRowPx = topTarget;
     let trackedRowMinPx = trackedTarget;
@@ -1384,6 +1551,9 @@ function App() {
           <SelectedTargetPanel
             selectedObject={selectedObject}
             layoutDevConfig={effectiveLayoutDevConfig}
+            onOpenTodDialog={handleOpenTodDialog}
+            isTrackLossGraceActive={selectedObjectGraceRemainingMs > 0}
+            trackLossGraceRemainingMs={selectedObjectGraceRemainingMs}
           />
         </div>
 
@@ -1444,6 +1614,14 @@ function App() {
         enabled={isAutoTrackingEnabled}
         onEnabledChange={handleAutoTrackingEnabledChange}
       />
+      {selectedObject && (
+        <TodDataDialog
+          open={isTodDialogOpen}
+          selectedObject={selectedObject}
+          onClose={handleCloseTodDialog}
+          onApplyResult={handleApplyTodResult}
+        />
+      )}
     </div>
   );
 }

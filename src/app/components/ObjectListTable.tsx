@@ -18,6 +18,7 @@ type SortField =
   | 'distance'
   | 'speed'
   | 'confidence'
+  | 'score'
   | 'status';
 type SortDirection = 'asc' | 'desc';
 
@@ -85,8 +86,13 @@ export function ObjectListTable({
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const expandedWindowRef = useRef<Window | null>(null);
   const tableScale = layoutDevConfig.tableFontScale;
+  const isCompactTable = tableScale <= 0.9;
   const scaledPx = (base: number) => `${(base * tableScale).toFixed(1)}px`;
   const scaledRem = (base: number) => `${(base * tableScale).toFixed(3)}rem`;
+  const distanceHeader = isCompactTable ? '거리' : '거리 (m)';
+  const speedHeader = isCompactTable ? '속도' : '속도 (m/s)';
+  const confidenceHeader = isCompactTable ? '신뢰도' : '신뢰도 (%)';
+  const scoreHeader = isCompactTable ? '점수' : '점수 (%)';
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -130,6 +136,10 @@ export function ObjectListTable({
         case 'confidence':
           aVal = a.confidence;
           bVal = b.confidence;
+          break;
+        case 'score':
+          aVal = a.score ?? a.confidence;
+          bVal = b.score ?? b.confidence;
           break;
         case 'status':
           aVal = STATUS_ORDER[a.status] ?? 0;
@@ -186,6 +196,25 @@ export function ObjectListTable({
       default:
         return 'border-amber-700/55 bg-amber-950/30 text-amber-200';
     }
+  };
+
+  const getTodUsageBadge = (selectedSource?: string, todAvailable?: boolean) => {
+    if (selectedSource === 'TOD_YOLO') {
+      return {
+        label: 'TOD 사용',
+        className: 'border border-sky-600/65 bg-sky-950/30 text-sky-200',
+      };
+    }
+    if (todAvailable) {
+      return {
+        label: 'TOD 미채택',
+        className: 'border border-amber-600/60 bg-amber-950/30 text-amber-200',
+      };
+    }
+    return {
+      label: 'TOD 미사용',
+      className: 'border border-slate-600/70 bg-slate-900/70 text-slate-300',
+    };
   };
 
   const getRiskBadge = (riskLevel: string): { label: string; className: string } => {
@@ -539,7 +568,7 @@ export function ObjectListTable({
               <th class="num-col">고도 (m)</th>
               <th class="num-col">추적 (s)</th>
               <th class="num-col">신뢰도 (%)</th>
-              <th class="num-col">치수 L×W×H (m)</th>
+              <th class="num-col">점수 (%)</th>
               <th class="num-col">진행각 (°)</th>
               <th>좌표 (lat, lon)</th>
               <th>상태</th>
@@ -612,7 +641,7 @@ export function ObjectListTable({
         const selectedClass = obj.id === selectedObjectId ? 'selected' : '';
         const criticalClass = obj.riskLevel === 'CRITICAL' ? 'critical-row' : '';
         const rowClass = [selectedClass, criticalClass].filter(Boolean).join(' ');
-        const sizeLabel = `${obj.size.length.toFixed(1)} x ${obj.size.width.toFixed(1)} x ${obj.size.height.toFixed(1)}`;
+        const scoreLabel = (obj.score ?? obj.confidence).toFixed(1);
         const course = toCourseDegrees(obj.velocity).toFixed(1);
         const geoLabel = obj.geoPosition
           ? `${obj.geoPosition.lat.toFixed(4)}, ${obj.geoPosition.lon.toFixed(4)}`
@@ -631,7 +660,7 @@ export function ObjectListTable({
   <td class="num-val">${obj.position.z.toFixed(1)}</td>
   <td class="num-val">${obj.trackingDuration.toFixed(1)}</td>
   <td class="num-val">${obj.confidence.toFixed(1)}</td>
-  <td class="num-val">${sizeLabel}</td>
+  <td class="num-val">${scoreLabel}</td>
   <td class="num-val">${course}</td>
   <td class="geo truncate-cell ${geoCellClass}">${escapeHtml(geoLabel)}</td>
   <td><span class="status ${statusClass}">${escapeHtml(statusLabel)}</span></td>
@@ -746,15 +775,15 @@ export function ObjectListTable({
       <div className="flex-1 overflow-auto">
           <table className="argus-data-table w-full table-fixed text-[13px] leading-[1.35]" style={{ fontSize: scaledPx(13) }}>
           <colgroup>
-            <col style={{ width: '10%' }} />
-            <col style={{ width: '18%' }} />
+            <col style={{ width: isCompactTable ? '9%' : '10%' }} />
+            <col style={{ width: isCompactTable ? '17%' : '18%' }} />
             <col style={{ width: '12%' }} />
-            <col style={{ width: '12%' }} />
+            <col style={{ width: isCompactTable ? '11%' : '12%' }} />
             <col style={{ width: '11%' }} />
             <col style={{ width: '11%' }} />
-            <col style={{ width: '10%' }} />
-            <col style={{ width: '9%' }} />
-            <col style={{ width: '7%' }} />
+            <col style={{ width: isCompactTable ? '11%' : '10%' }} />
+            <col style={{ width: isCompactTable ? '10%' : '9%' }} />
+            <col style={{ width: '8%' }} />
           </colgroup>
           <thead className="sticky top-0 z-10 bg-[#0f161f]/95 backdrop-blur border-b border-slate-700/70">
             <tr className="text-slate-400 uppercase tracking-[0.08em]" style={{ fontSize: scaledPx(13) }}>
@@ -799,7 +828,7 @@ export function ObjectListTable({
                   onClick={() => handleSort('distance')}
                   className="flex items-center gap-1.5 hover:text-cyan-300 transition-colors ml-auto"
                 >
-                  거리 (m)
+                  {distanceHeader}
                   <SortIcon field="distance" />
                 </button>
               </th>
@@ -808,7 +837,7 @@ export function ObjectListTable({
                   onClick={() => handleSort('speed')}
                   className="flex items-center gap-1.5 hover:text-cyan-300 transition-colors ml-auto"
                 >
-                  속도 (m/s)
+                  {speedHeader}
                   <SortIcon field="speed" />
                 </button>
               </th>
@@ -817,11 +846,19 @@ export function ObjectListTable({
                   onClick={() => handleSort('confidence')}
                   className="flex items-center gap-1.5 hover:text-cyan-300 transition-colors ml-auto"
                 >
-                  신뢰도 (%)
+                  {confidenceHeader}
                   <SortIcon field="confidence" />
                 </button>
               </th>
-              <th className="px-4 py-3.5 text-right font-semibold whitespace-nowrap">크기 (m)</th>
+              <th className="px-4 py-3.5 text-right font-semibold whitespace-nowrap">
+                <button
+                  onClick={() => handleSort('score')}
+                  className="flex items-center gap-1.5 hover:text-cyan-300 transition-colors ml-auto"
+                >
+                  {scoreHeader}
+                  <SortIcon field="score" />
+                </button>
+              </th>
               <th className="px-4 py-3.5 text-left font-semibold whitespace-nowrap">
                 <button
                   onClick={() => handleSort('status')}
@@ -844,14 +881,24 @@ export function ObjectListTable({
                     ? 'NON-UAV'
                     : 'UNKNOWN';
               const classLabel = CLASS_NAMES_KR[obj.class] ?? obj.class;
+              const combinedClassName = obj.combinedInference?.className;
+              const combinedLabel =
+                combinedClassName && combinedClassName !== 'UNKNOWN'
+                  ? CLASS_NAMES_KR[combinedClassName] ?? combinedClassName
+                  : combinedClassName ?? 'UNKNOWN';
+              const combinedSource = obj.combinedInference?.selectedSource;
+              const combinedSummary = obj.combinedInference
+                ? `${combinedLabel} · ${combinedSource === 'TOD_YOLO' ? 'TOD' : 'SIGNAL'}`
+                : '';
+              const todUsage = getTodUsageBadge(combinedSource, obj.todInference?.available);
               const statusLabel = STATUS_NAMES_KR[obj.status] ?? obj.status;
               const idClass = getAdaptiveFontClass(obj.id, 9, 13);
               const classLabelClass = getAdaptiveFontClass(classLabel, 8, 12);
               const statusClass = getAdaptiveFontClass(statusLabel, 5, 9);
               const probLabel = `${(obj.uavProbability ?? 0).toFixed(1)}%`;
               const probClass = getAdaptiveFontClass(probLabel, 6, 10);
-              const sizeLabel = `${obj.size.length.toFixed(1)} x ${obj.size.width.toFixed(1)}`;
-              const sizeClass = getAdaptiveFontClass(sizeLabel, 11, 16);
+              const scoreLabel = `${(obj.score ?? obj.confidence).toFixed(1)}`;
+              const scoreClass = getAdaptiveFontClass(scoreLabel, 6, 10);
 
               return (
                 <tr
@@ -886,9 +933,19 @@ export function ObjectListTable({
                     <span className={`block truncate font-mono tabular-nums text-slate-100 ${idClass}`}>
                       {obj.id}
                     </span>
+                    <span
+                      className={`mt-1 inline-flex max-w-full items-center rounded border px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap truncate ${todUsage.className}`}
+                    >
+                      {todUsage.label}
+                    </span>
                   </td>
                   <td className="px-4 py-3.5 text-slate-200 overflow-hidden">
                     <span className={`block truncate ${classLabelClass}`}>{classLabel}</span>
+                    {combinedSummary ? (
+                      <span className="block truncate text-[11px] text-slate-500 mt-0.5">
+                        {combinedSummary}
+                      </span>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3.5 text-right overflow-hidden">
                     <span className="block truncate font-mono tabular-nums text-slate-200 text-xs sm:text-[13px]">
@@ -906,8 +963,8 @@ export function ObjectListTable({
                     </span>
                   </td>
                   <td className="px-4 py-3.5 text-right overflow-hidden">
-                    <span className={`block truncate font-mono tabular-nums text-slate-300 text-xs ${sizeClass}`}>
-                      {sizeLabel}
+                    <span className={`block truncate font-mono tabular-nums text-slate-300 text-xs ${scoreClass}`}>
+                      {scoreLabel}
                     </span>
                   </td>
                   <td className="px-4 py-3.5 overflow-hidden">

@@ -31,6 +31,7 @@ export function CandidateTracksPanel({
 }: CandidateTracksPanelProps) {
   const candidates = objects.filter((obj) => obj.status === 'CANDIDATE');
   const candidateScale = layoutDevConfig.candidateFontScale;
+  const isCompactCandidate = candidateScale <= 0.9;
   const scaledPx = (base: number) => `${(base * candidateScale).toFixed(1)}px`;
   const scaledRem = (base: number) => `${(base * candidateScale).toFixed(3)}rem`;
 
@@ -85,7 +86,9 @@ export function CandidateTracksPanel({
             <Radio className="w-5 h-5" />
             후보 추적군
           </h2>
-          <span className="argus-candidate-subtitle text-sm text-slate-500 whitespace-nowrap" style={{ fontSize: scaledPx(14) }}>신호 손실 / 예측 추적군</span>
+          <span className="argus-candidate-subtitle text-sm text-slate-500 whitespace-nowrap" style={{ fontSize: scaledPx(14) }}>
+            {isCompactCandidate ? '신호 손실/예측' : '신호 손실 / 예측 추적군'}
+          </span>
         </div>
         <span className="candidate-active-chip inline-flex items-center border border-amber-700/60 bg-amber-950/35 text-amber-200 text-xs px-2.5 py-1 rounded font-semibold tabular-nums" style={{ fontSize: scaledPx(12) }}>
           {candidates.length} ACTIVE

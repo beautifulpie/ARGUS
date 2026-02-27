@@ -11,6 +11,8 @@
     "dev:web": "vite",
     "electron:start": "electron .",
     "electron:dev": "node scripts/dev-electron.cjs",
+    "electron:dev:gpu": "RADAR_ELECTRON_DISABLE_GPU=0 RADAR_ELECTRON_OZONE_PLATFORM=x11 node scripts/dev-electron.cjs",
+    "electron:dev:gpu:verbose": "RADAR_ELECTRON_DISABLE_GPU=0 RADAR_ELECTRON_OZONE_PLATFORM=x11 RADAR_ELECTRON_GPU_DIAG_VERBOSE=1 node scripts/dev-electron.cjs",
     "electron:dist": "npm run build:web && electron-builder --win --publish never",
     "python:check": "python3 -m py_compile ARGUS-Brain/app/*.py ARGUS-Eye/app/*.py"
   },

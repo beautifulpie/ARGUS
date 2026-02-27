@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { FolderOpen, Settings2, X } from 'lucide-react';
 
 export type DetectionMode = 'ACCURACY' | 'SPEED';
+export type ComputeMode = 'CPU_ONLY' | 'AUTO';
 export type MapThemeMode = 'DARK' | 'LIGHT';
 export type MapLabelLevel = 'PROVINCE' | 'DISTRICT' | 'EMD';
 
@@ -13,6 +14,7 @@ export interface ConsoleSettings {
   positionCode: string;
   modelPath: string;
   detectionMode: DetectionMode;
+  computeMode: ComputeMode;
   mapLabelLevel: MapLabelLevel;
   mapTheme: MapThemeMode;
   showUtmGrid: boolean;
@@ -298,6 +300,46 @@ export function SettingsDialog({
                 <p className="text-sm font-semibold">속도 우선</p>
                 <p className="text-xs mt-1 opacity-80">낮은 지연 시간과 높은 처리량에 집중합니다.</p>
               </button>
+            </div>
+
+            <div className="mt-4">
+              <h4 className="text-xs font-semibold text-gray-300">연산 모드</h4>
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      computeMode: 'CPU_ONLY',
+                    }))
+                  }
+                  className={`rounded border px-3 py-3 text-left ${
+                    draft.computeMode === 'CPU_ONLY'
+                      ? 'settings-option-selected border-cyan-500 bg-cyan-900/35 text-cyan-100'
+                      : 'border-cyan-900/70 bg-[#09121a] text-gray-300'
+                  }`}
+                >
+                  <p className="text-sm font-semibold">CPU 전용</p>
+                  <p className="text-xs mt-1 opacity-80">GPU 추론/모니터링을 사용하지 않습니다.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      computeMode: 'AUTO',
+                    }))
+                  }
+                  className={`rounded border px-3 py-3 text-left ${
+                    draft.computeMode === 'AUTO'
+                      ? 'settings-option-selected border-cyan-500 bg-cyan-900/35 text-cyan-100'
+                      : 'border-cyan-900/70 bg-[#09121a] text-gray-300'
+                  }`}
+                >
+                  <p className="text-sm font-semibold">자동</p>
+                  <p className="text-xs mt-1 opacity-80">환경에 따라 가속 사용을 허용합니다.</p>
+                </button>
+              </div>
             </div>
           </section>
 

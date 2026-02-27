@@ -12,7 +12,10 @@ contextBridge.exposeInMainWorld('radarRuntime', {
   getMainWindowBounds: () => ipcRenderer.invoke('runtime:getMainWindowBounds'),
   setMainWindowSize: (payload) => ipcRenderer.invoke('runtime:setMainWindowSize', payload),
   pickModelPath: (options) => ipcRenderer.invoke('runtime:pickModelPath', options),
+  pickTodFiles: (options) => ipcRenderer.invoke('runtime:pickTodFiles', options),
+  listTodEntries: (payload) => ipcRenderer.invoke('runtime:listTodEntries', payload),
   pickDirectory: (options) => ipcRenderer.invoke('runtime:pickDirectory', options),
+  inferTodPath: (payload) => ipcRenderer.invoke('runtime:inferTodPath', payload),
   readGeoJsonFromDirectory: (payload) => ipcRenderer.invoke('runtime:readGeoJsonFromDirectory', payload),
   onStatus: (handler) => {
     const listener = (_event, payload) => handler(payload);

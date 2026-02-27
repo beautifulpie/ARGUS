@@ -10,10 +10,46 @@ export type ObjectStatus = 'STABLE' | 'NEW' | 'LOST' | 'TRACKING' | 'CANDIDATE';
 
 export type ObjectClass = 'HELICOPTER' | 'UAV' | 'HIGHSPEED' | 'BIRD_FLOCK' | 'BIRD' | 'CIVIL_AIR' | 'FIGHTER';
 export type UavDecision = 'UAV' | 'NON_UAV' | 'UNKNOWN';
+export type InferenceSource = 'RADAR_SIGNAL' | 'TOD_YOLO';
 
 export interface ClassProbability {
   className: ObjectClass;
   probability: number;
+}
+
+export interface TodClassProbability {
+  className: ObjectClass | 'UNKNOWN';
+  probability: number;
+}
+
+export interface TodInferenceResult {
+  available: boolean;
+  className: ObjectClass | 'UNKNOWN';
+  confidence: number;
+  probabilities: TodClassProbability[];
+  detectionCount: number;
+  sourcePath: string;
+  sourceType: 'IMAGE' | 'VIDEO' | 'UNKNOWN';
+  decodedPath?: string;
+  decoderUsed?: boolean;
+  decoderLatencyMs?: number;
+  modelId: string;
+  modelVersion: string;
+  latencyMs: number;
+  cacheHit?: boolean;
+  reason?: string;
+}
+
+export interface CombinedInferenceResult {
+  selectedSource: InferenceSource;
+  className: ObjectClass | 'UNKNOWN';
+  confidence: number;
+  signalClass: ObjectClass | 'UNKNOWN';
+  signalConfidence: number;
+  todClass: ObjectClass | 'UNKNOWN';
+  todConfidence: number;
+  agreement: boolean | null;
+  policy?: string;
 }
 
 export interface GeoPosition {
@@ -26,11 +62,12 @@ export interface DetectedObject {
   id: string;
   class: ObjectClass;
   confidence: number;
+  score: number; // Radar target-likelihood score (0-100)
   probabilities: ClassProbability[]; // Other candidate probabilities
   position: { x: number; y: number; z: number };
   velocity: { x: number; y: number; z: number };
   speed: number; // Magnitude of velocity
-  size: { width: number; height: number; length: number };
+  size?: { width: number; height: number; length: number }; // Optional legacy/display-only shape hint
   distance: number; // Distance from sensor
   trackingDuration: number; // How long has this been tracked (seconds)
   status: ObjectStatus;
@@ -48,6 +85,14 @@ export interface DetectedObject {
   featureWindowMs?: number;
   inferenceModelVersion?: string;
   inferenceLatencyMs?: number;
+  signalInference?: {
+    class: ObjectClass;
+    confidence: number;
+    probabilities: ClassProbability[];
+    inferenceModelVersion?: string;
+  };
+  todInference?: TodInferenceResult;
+  combinedInference?: CombinedInferenceResult;
 }
 
 export interface ClassificationResult {

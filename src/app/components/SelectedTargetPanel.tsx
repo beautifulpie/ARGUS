@@ -1,10 +1,19 @@
-import { AlertTriangle, Box, Navigation, Target } from 'lucide-react';
-import { DetectedObject, ObjectClass, ObjectStatus, RiskLevel, UavDecision } from '../types';
+import { Navigation, Target } from 'lucide-react';
+import {
+  DetectedObject,
+  ObjectClass,
+  ObjectStatus,
+  RiskLevel,
+  UavDecision,
+} from '../types';
 import { type LayoutDevConfig } from '../layoutDevConfig';
 
 interface SelectedTargetPanelProps {
   selectedObject: DetectedObject | null;
   layoutDevConfig: LayoutDevConfig;
+  onOpenTodDialog?: () => void;
+  isTrackLossGraceActive?: boolean;
+  trackLossGraceRemainingMs?: number;
 }
 
 const CLASS_NAMES_KR: Record<ObjectClass, string> = {
@@ -38,6 +47,11 @@ const UAV_DECISION_NAMES: Record<UavDecision, string> = {
   UNKNOWN: 'UNKNOWN',
 };
 
+const INFERENCE_SOURCE_NAMES: Record<'RADAR_SIGNAL' | 'TOD_YOLO', string> = {
+  RADAR_SIGNAL: 'SIGNAL',
+  TOD_YOLO: 'TOD-YOLO',
+};
+
 const THREAT_BADGE_CLASS: Record<RiskLevel, string> = {
   LOW: 'argus-threat-low',
   MEDIUM: 'argus-threat-medium',
@@ -58,7 +72,13 @@ const UAV_BADGE_CLASS: Record<UavDecision, string> = {
   UNKNOWN: 'argus-uav-unknown',
 };
 
-export function SelectedTargetPanel({ selectedObject, layoutDevConfig }: SelectedTargetPanelProps) {
+export function SelectedTargetPanel({
+  selectedObject,
+  layoutDevConfig,
+  onOpenTodDialog,
+  isTrackLossGraceActive = false,
+  trackLossGraceRemainingMs = 0,
+}: SelectedTargetPanelProps) {
   if (!selectedObject) {
     return (
       <div
@@ -82,6 +102,27 @@ export function SelectedTargetPanel({ selectedObject, layoutDevConfig }: Selecte
   const uavDecision = selectedObject.uavDecision ?? 'UNKNOWN';
   const uavProbability = selectedObject.uavProbability ?? 0;
   const confidence = Math.max(0, Math.min(100, selectedObject.confidence));
+  const radarScore = Math.max(0, Math.min(100, selectedObject.score ?? confidence));
+  const todInference = selectedObject.todInference;
+  const combinedInference = selectedObject.combinedInference;
+  const todClassLabel =
+    todInference && todInference.className !== 'UNKNOWN'
+      ? (CLASS_NAMES_KR[todInference.className] ?? todInference.className)
+      : 'UNKNOWN';
+  const combinedClassLabel =
+    combinedInference && combinedInference.className !== 'UNKNOWN'
+      ? (CLASS_NAMES_KR[combinedInference.className] ?? combinedInference.className)
+      : (combinedInference?.className ?? 'UNKNOWN');
+  const combinedSourceLabel =
+    combinedInference ? INFERENCE_SOURCE_NAMES[combinedInference.selectedSource] : 'SIGNAL';
+  const trackLossGraceSeconds = Math.max(0, trackLossGraceRemainingMs) / 1000;
+  const isTodSelected = combinedInference?.selectedSource === 'TOD_YOLO';
+  const todUsageLabel = isTodSelected ? '사용' : todInference?.available ? '미채택' : '미사용';
+  const todUsageClass = isTodSelected
+    ? 'border-sky-700/65 bg-sky-950/35 text-sky-200'
+    : todInference?.available
+      ? 'border-amber-700/65 bg-amber-950/30 text-amber-200'
+      : 'border-slate-600/70 bg-slate-900/65 text-slate-300';
 
   return (
     <section
@@ -98,6 +139,11 @@ export function SelectedTargetPanel({ selectedObject, layoutDevConfig }: Selecte
               <span className="argus-track-status">추적 안정성 {STATUS_NAMES_KR[selectedObject.status]}</span>
             </div>
             <p className="argus-header-caption">선택 비행체 상태</p>
+            {isTrackLossGraceActive && (
+              <p className="mt-1 inline-flex items-center rounded border border-amber-700/60 bg-amber-950/30 px-2 py-0.5 text-[11px] font-semibold text-amber-200 tabular-nums">
+                추적 신호 유실 유예 {trackLossGraceSeconds.toFixed(1)}s
+              </p>
+            )}
           </div>
 
           <div className={`argus-threat-badge ${THREAT_BADGE_CLASS[selectedObject.riskLevel]}`}>
@@ -108,7 +154,16 @@ export function SelectedTargetPanel({ selectedObject, layoutDevConfig }: Selecte
 
         <div className="argus-aircraft-grid">
           <article className="argus-aircraft-card argus-primary-card">
-            <h3 className="argus-card-title">비행체 분류</h3>
+            <div className="argus-primary-head">
+              <h3 className="argus-card-title">비행체 분류</h3>
+              <button
+                type="button"
+                onClick={onOpenTodDialog}
+                className="argus-tod-button"
+              >
+                TOD 데이터 사용
+              </button>
+            </div>
 
             <div className="argus-primary-metrics">
               <div>
@@ -171,8 +226,32 @@ export function SelectedTargetPanel({ selectedObject, layoutDevConfig }: Selecte
                   </span>
                 </div>
                 <div className="argus-detail-row">
-                  <span className="argus-detail-label">모델</span>
+                  <span className="argus-detail-label">신호 모델</span>
                   <span className="argus-detail-value">{selectedObject.inferenceModelVersion || '-'}</span>
+                </div>
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label">TOD YOLO</span>
+                  <span className="argus-detail-value">
+                    {todInference?.available
+                      ? `${todClassLabel} ${todInference.confidence.toFixed(1)}%`
+                      : '미입력/비활성'}
+                  </span>
+                </div>
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label">TOD 모델</span>
+                  <span className="argus-detail-value">{todInference?.modelVersion || '-'}</span>
+                </div>
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label">TOD 적용</span>
+                  <span className={`argus-status-badge ${todUsageClass}`}>{todUsageLabel}</span>
+                </div>
+                <div className="argus-detail-row">
+                  <span className="argus-detail-label">종합 출력</span>
+                  <span className="argus-detail-value">
+                    {combinedClassLabel} {combinedInference?.confidence?.toFixed(1) ?? confidence.toFixed(1)}%
+                    {' · '}
+                    {combinedSourceLabel}
+                  </span>
                 </div>
               </div>
             </article>
@@ -203,29 +282,20 @@ export function SelectedTargetPanel({ selectedObject, layoutDevConfig }: Selecte
             </article>
 
             <article className="argus-aircraft-card">
-              <h3 className="argus-card-title">치수</h3>
-              <div className="argus-detail-list">
-                <div className="argus-detail-row">
-                  <span className="argus-detail-label flex items-center gap-1">
-                    <Target className="w-3.5 h-3.5" />
-                    길이 (m)
-                  </span>
-                  <span className="argus-kpi-number argus-small-kpi">{selectedObject.size.length.toFixed(1)}</span>
+              <h3 className="argus-card-title">레이더 점수</h3>
+              <div className="argus-kpi-grid">
+                <div className="argus-kpi-item">
+                  <p className="argus-metric-label">score (%)</p>
+                  <p className="argus-kpi-number">{radarScore.toFixed(1)}</p>
                 </div>
-                <div className="argus-detail-row">
-                  <span className="argus-detail-label flex items-center gap-1">
-                    <Box className="w-3.5 h-3.5" />
-                    너비 (m)
-                  </span>
-                  <span className="argus-kpi-number argus-small-kpi">{selectedObject.size.width.toFixed(1)}</span>
+                <div className="argus-kpi-item">
+                  <p className="argus-metric-label">신뢰도 (%)</p>
+                  <p className="argus-kpi-number">{confidence.toFixed(1)}</p>
                 </div>
-                <div className="argus-detail-row">
-                  <span className="argus-detail-label flex items-center gap-1">
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    높이 (m)
-                  </span>
-                  <span className="argus-kpi-number argus-small-kpi">{selectedObject.size.height.toFixed(1)}</span>
-                </div>
+              </div>
+              <div className="argus-detail-row mt-2">
+                <span className="argus-detail-label">의미</span>
+                <span className="argus-detail-value">표적 가능성 + 추적 신뢰도</span>
               </div>
             </article>
           </div>

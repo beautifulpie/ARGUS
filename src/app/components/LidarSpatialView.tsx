@@ -37,6 +37,26 @@ const CLASS_NAMES_KR: Record<ObjectClass, string> = {
   FIGHTER: '전투기',
 };
 
+const CLASS_MARKER_SIZE_HINT: Record<ObjectClass, { length: number; width: number }> = {
+  HELICOPTER: { length: 15, width: 12 },
+  UAV: { length: 2, width: 2 },
+  HIGHSPEED: { length: 18, width: 8 },
+  BIRD_FLOCK: { length: 5, width: 5 },
+  BIRD: { length: 1, width: 1 },
+  CIVIL_AIR: { length: 40, width: 35 },
+  FIGHTER: { length: 18, width: 12 },
+};
+
+const getTrackMarkerBoxSize = (obj: DetectedObject, scale: number) => {
+  const fallback = CLASS_MARKER_SIZE_HINT[obj.class];
+  const lengthHint = Math.max(0.6, obj.size?.length ?? fallback.length);
+  const widthHint = Math.max(0.6, obj.size?.width ?? fallback.width);
+  return {
+    boxWidth: Math.max(lengthHint * scale, 9),
+    boxHeight: Math.max(widthHint * scale, 7),
+  };
+};
+
 const getTrackTone = (obj: DetectedObject): TrackTone => {
   if (obj.riskLevel === 'CRITICAL' || obj.riskLevel === 'HIGH') {
     return 'THREAT';
@@ -978,7 +998,7 @@ const extractLabelsFromGeoJson = (geoJson: unknown): GeoLabel[] => {
       deduped.set(key, label);
     }
   });
-  return Array.from(deduped.values());
+  return removeSejongShortDuplicate(Array.from(deduped.values()));
 };
 
 const extractPointFromGeometry = (geometry: unknown): GeoPoint | null => {
@@ -1035,6 +1055,17 @@ const toAggregatedLabels = (
     },
   }));
 
+const normalizeAdminLabelName = (name: string) => name.replace(/\s+/g, '').trim();
+
+const removeSejongShortDuplicate = (labels: GeoLabel[]): GeoLabel[] => {
+  const normalizedNames = new Set(labels.map((label) => normalizeAdminLabelName(label.name)));
+  if (!normalizedNames.has('세종특별자치시')) {
+    return labels;
+  }
+
+  return labels.filter((label) => normalizeAdminLabelName(label.name) !== '세종시');
+};
+
 const extractAdminLabelLayersFromGeoJson = (geoJson: unknown): AdminLabelLayers => {
   const province = new Map<string, { sumLat: number; sumLon: number; count: number }>();
   const district = new Map<string, { sumLat: number; sumLon: number; count: number }>();
@@ -1088,9 +1119,9 @@ const extractAdminLabelLayersFromGeoJson = (geoJson: unknown): AdminLabelLayers 
   }
 
   return {
-    province: toAggregatedLabels(province),
-    district: toAggregatedLabels(district),
-    emd: toAggregatedLabels(emd),
+    province: removeSejongShortDuplicate(toAggregatedLabels(province)),
+    district: removeSejongShortDuplicate(toAggregatedLabels(district)),
+    emd: removeSejongShortDuplicate(toAggregatedLabels(emd)),
   };
 };
 
@@ -1960,8 +1991,7 @@ export function LidarSpatialView({
       const isFocused = isSelected || isHovered;
       const isCandidate = obj.status === 'CANDIDATE';
       const focusAlpha = hasFocusedObject && !isFocused ? 0.34 : 1;
-      const boxWidth = Math.max(obj.size.length * scale, 9);
-      const boxHeight = Math.max(obj.size.width * scale, 7);
+      const { boxWidth, boxHeight } = getTrackMarkerBoxSize(obj, scale);
 
       // Draw track history trail
       if (obj.geoTrackHistory && obj.geoTrackHistory.length > 1) {
@@ -2245,8 +2275,7 @@ export function LidarSpatialView({
       const x = canvasPoint.x;
       const y = canvasPoint.y;
       const distance = Math.hypot(canvasX - x, canvasY - y);
-      const boxWidth = Math.max(obj.size.length * scale, 9);
-      const boxHeight = Math.max(obj.size.width * scale, 7);
+      const { boxWidth, boxHeight } = getTrackMarkerBoxSize(obj, scale);
       const inBox =
         canvasX >= x - boxWidth / 2 &&
         canvasX <= x + boxWidth / 2 &&

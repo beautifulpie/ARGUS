@@ -761,6 +761,38 @@
   line-height: 1.34;
 }
 
+.argus-primary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.argus-tod-button {
+  height: calc(34px * var(--argus-selected-font-scale));
+  min-height: 28px;
+  padding: 0 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.54);
+  background: rgba(12, 74, 110, 0.34);
+  color: #d8f4ff;
+  font-size: calc(0.82rem * var(--argus-selected-font-scale));
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.argus-tod-button:hover {
+  background: rgba(8, 145, 178, 0.28);
+  border-color: rgba(34, 211, 238, 0.68);
+}
+
+.argus-tod-button:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.65);
+  outline-offset: 1px;
+}
+
 .argus-primary-metrics {
   margin-top: 8px;
   display: grid;
@@ -1164,6 +1196,12 @@
     font-size: 1.08rem;
   }
 
+  .argus-tod-button {
+    height: 30px;
+    padding: 0 9px;
+    font-size: 0.74rem;
+  }
+
   .argus-primary-metrics {
     margin-top: 6px;
   }
@@ -1256,6 +1294,12 @@
     font-size: 0.98rem;
   }
 
+  .argus-tod-button {
+    height: 29px;
+    padding: 0 8px;
+    font-size: 0.72rem;
+  }
+
   .argus-primary-class {
     font-size: 1.42rem;
   }
@@ -1278,6 +1322,95 @@
 
   .argus-eval-threat-right {
     font-size: 1.52rem;
+  }
+}
+
+@media (max-width: 1600px), (max-height: 900px) {
+  .argus-section-header {
+    padding-top: 10px !important;
+    padding-bottom: 9px !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+    gap: 10px !important;
+  }
+
+  .argus-section-header h2 {
+    font-size: 1.34rem !important;
+    line-height: 1.12 !important;
+  }
+
+  .argus-timeline-title {
+    font-size: 1.24rem !important;
+  }
+
+  .argus-data-table th,
+  .argus-data-table td {
+    padding-top: 0.42rem !important;
+    padding-bottom: 0.42rem !important;
+    padding-left: 0.66rem !important;
+    padding-right: 0.66rem !important;
+  }
+
+  .argus-controls-grid .argus-control-button {
+    font-size: 11px !important;
+    gap: 5px !important;
+    padding-left: 7px !important;
+    padding-right: 7px !important;
+  }
+}
+
+@media (max-width: 1366px), (max-height: 768px) {
+  .argus-section-header {
+    padding-top: 8px !important;
+    padding-bottom: 7px !important;
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+    gap: 8px !important;
+  }
+
+  .argus-section-header h2 {
+    font-size: 1.18rem !important;
+    line-height: 1.08 !important;
+    letter-spacing: 0.04em !important;
+  }
+
+  .argus-timeline-title {
+    font-size: 1.08rem !important;
+  }
+
+  .argus-event-timeline .argus-section-header > div:last-child {
+    gap: 6px !important;
+  }
+
+  .argus-clear-timeline-button {
+    height: 28px !important;
+    font-size: 10px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+  }
+
+  .argus-data-table {
+    font-size: 11px !important;
+  }
+
+  .argus-data-table th,
+  .argus-data-table td {
+    padding-top: 0.35rem !important;
+    padding-bottom: 0.35rem !important;
+    padding-left: 0.55rem !important;
+    padding-right: 0.55rem !important;
+  }
+
+  .argus-controls-grid .argus-control-button {
+    font-size: 10px !important;
+    gap: 4px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+  }
+
+  .argus-controls-grid .argus-control-button span {
+    overflow: visible !important;
+    text-overflow: clip !important;
   }
 }
 
@@ -1360,6 +1493,17 @@
   background: #e6f4ff;
   border-color: rgba(14, 116, 144, 0.45);
   color: #0f172a;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-tod-button {
+  background: rgba(219, 234, 254, 0.86);
+  border-color: rgba(14, 116, 144, 0.52);
+  color: #0f172a;
+}
+
+.argus-root[data-theme='LIGHT'] .argus-tod-button:hover {
+  background: rgba(191, 219, 254, 0.86);
+  border-color: rgba(2, 132, 199, 0.62);
 }
 
 .argus-root[data-theme='LIGHT'] .argus-threat-critical {
