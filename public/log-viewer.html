@@ -37,6 +37,37 @@
         box-sizing: border-box;
       }
 
+      html,
+      body,
+      .table-wrap {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(84, 122, 153, 0.9) rgba(10, 16, 25, 0.78);
+      }
+
+      ::-webkit-scrollbar {
+        width: 11px;
+        height: 11px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: rgba(10, 16, 25, 0.78);
+        border-radius: 999px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: rgba(84, 122, 153, 0.9);
+        border: 2px solid rgba(5, 11, 18, 0.96);
+        border-radius: 999px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(121, 171, 214, 0.95);
+      }
+
+      ::-webkit-scrollbar-corner {
+        background: rgba(10, 16, 25, 0.78);
+      }
+
       body {
         margin: 0;
         background: var(--bg);

@@ -180,6 +180,52 @@
   }
 }
 
+.argus-root {
+  --argus-scrollbar-size: 11px;
+  --argus-scrollbar-track: rgba(9, 16, 24, 0.72);
+  --argus-scrollbar-thumb: rgba(63, 98, 128, 0.78);
+  --argus-scrollbar-thumb-hover: rgba(89, 138, 176, 0.9);
+  --argus-scrollbar-border: rgba(5, 10, 16, 0.95);
+}
+
+.argus-root[data-theme='LIGHT'] {
+  --argus-scrollbar-track: rgba(214, 224, 234, 0.92);
+  --argus-scrollbar-thumb: rgba(138, 157, 177, 0.95);
+  --argus-scrollbar-thumb-hover: rgba(95, 118, 142, 0.98);
+  --argus-scrollbar-border: rgba(241, 245, 249, 0.98);
+}
+
+/* Theme-aware global scrollbars (main app) */
+.argus-root,
+.argus-root * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--argus-scrollbar-thumb) var(--argus-scrollbar-track);
+}
+
+.argus-root ::-webkit-scrollbar {
+  width: var(--argus-scrollbar-size);
+  height: var(--argus-scrollbar-size);
+}
+
+.argus-root ::-webkit-scrollbar-track {
+  background: var(--argus-scrollbar-track);
+  border-radius: 999px;
+}
+
+.argus-root ::-webkit-scrollbar-thumb {
+  background: var(--argus-scrollbar-thumb);
+  border: 2px solid var(--argus-scrollbar-border);
+  border-radius: 999px;
+}
+
+.argus-root ::-webkit-scrollbar-thumb:hover {
+  background: var(--argus-scrollbar-thumb-hover);
+}
+
+.argus-root ::-webkit-scrollbar-corner {
+  background: var(--argus-scrollbar-track);
+}
+
 .argus-root[data-theme='LIGHT'] .argus-surface {
   background-color: #f5f8fc !important;
   color: #0f172a !important;
