@@ -1555,6 +1555,7 @@ function App() {
             onSelectObject={handleSelectObject}
             mapCenter={settings.mapCenter}
             detectionMode={settings.detectionMode}
+            computeMode={settings.computeMode}
             mapTheme={effectiveTheme}
             mapLabelLevel={settings.mapLabelLevel}
             showUtmGrid={settings.showUtmGrid}

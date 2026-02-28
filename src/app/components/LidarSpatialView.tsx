@@ -9,6 +9,7 @@ interface LidarSpatialViewProps {
   onSelectObject: (id: string | null) => void;
   mapCenter: GeoPoint;
   detectionMode: 'ACCURACY' | 'SPEED';
+  computeMode: 'CPU_ONLY' | 'AUTO';
   mapTheme: 'DARK' | 'LIGHT';
   mapLabelLevel: 'PROVINCE' | 'DISTRICT' | 'EMD';
   showUtmGrid: boolean;
@@ -1131,6 +1132,7 @@ export function LidarSpatialView({
   onSelectObject,
   mapCenter,
   detectionMode,
+  computeMode,
   mapTheme,
   mapLabelLevel,
   showUtmGrid,
@@ -1249,6 +1251,13 @@ export function LidarSpatialView({
     staticLayerKeyRef.current = '';
     setTileVersion((prev) => prev + 1);
   }, [mapTheme]);
+
+  useEffect(() => {
+    // Recreate raster pipeline when compute mode toggles so 2D context hints are reapplied.
+    staticLayerCanvasRef.current = null;
+    staticLayerKeyRef.current = '';
+    setTileVersion((prev) => prev + 1);
+  }, [computeMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1441,7 +1450,13 @@ export function LidarSpatialView({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
+    const isCpuRenderMode = computeMode === 'CPU_ONLY';
+    const ctx = canvas.getContext(
+      '2d',
+      isCpuRenderMode
+        ? { alpha: false, desynchronized: false, willReadFrequently: true }
+        : { alpha: false, desynchronized: true }
+    );
     if (!ctx) return;
 
     const width = canvas.width;
@@ -1459,9 +1474,11 @@ export function LidarSpatialView({
     const showDistrictLabels =
       !lowDetailMode && (mapLabelLevel === 'DISTRICT' || mapLabelLevel === 'EMD');
     const showEmdLabels = !lowDetailMode && mapLabelLevel === 'EMD';
-    const tileFilter = isDarkTheme
-      ? 'grayscale(100%) brightness(28%) contrast(125%)'
-      : 'grayscale(45%) brightness(92%) contrast(108%)';
+    const tileFilter = isCpuRenderMode
+      ? 'none'
+      : isDarkTheme
+        ? 'grayscale(100%) brightness(28%) contrast(125%)'
+        : 'grayscale(45%) brightness(92%) contrast(108%)';
     const tileAlpha = isDarkTheme ? DARK_TILE_ALPHA : LIGHT_TILE_ALPHA;
     const shouldRenderBasemapTiles = isDarkTheme || SHOW_BASEMAP_IN_LIGHT_THEME;
     const overlayColor = isDarkTheme ? TACTICAL_DARK_OVERLAY : TACTICAL_LIGHT_OVERLAY;
@@ -1521,6 +1538,7 @@ export function LidarSpatialView({
       mapCenter.lon.toFixed(6),
       mapViewCenter.lat.toFixed(6),
       mapViewCenter.lon.toFixed(6),
+      computeMode,
       tileVersion,
       fontsReady ? 1 : 0,
       officialDataLoaded ? 1 : 0,
@@ -1548,7 +1566,12 @@ export function LidarSpatialView({
       staticLayerKeyRef.current = '';
     }
 
-    const staticCtx = staticCanvas.getContext('2d');
+    const staticCtx = staticCanvas.getContext(
+      '2d',
+      isCpuRenderMode
+        ? { alpha: false, desynchronized: false, willReadFrequently: true }
+        : { alpha: false, desynchronized: true }
+    );
     const shouldRenderStaticLayer =
       !isSpeedPriorityMode || !staticCtx || staticLayerKeyRef.current !== staticLayerKey;
 
@@ -2100,11 +2123,11 @@ export function LidarSpatialView({
       if (isCandidate) {
         ctx.setLineDash([3, 3]);
       }
-      if (tone === 'THREAT' && !isCandidate) {
+      if (tone === 'THREAT' && !isCandidate && !isCpuRenderMode) {
         ctx.shadowColor = '#ef4444';
         ctx.shadowBlur = 10;
       }
-      if (isFocused) {
+      if (isFocused && !isCpuRenderMode) {
         ctx.shadowColor = color;
         ctx.shadowBlur = 16;
       }
@@ -2222,6 +2245,7 @@ export function LidarSpatialView({
     mapViewCenter,
     mapZoom,
     detectionMode,
+    computeMode,
     mapTheme,
     mapLabelLevel,
     showUtmGrid,
@@ -2493,6 +2517,7 @@ export function LidarSpatialView({
       {/* Canvas */}
       <div ref={canvasContainerRef} className="flex-1 min-h-0 w-full">
         <canvas
+          key={`radar-canvas-${computeMode}`}
           ref={canvasRef}
           width={canvasSize.width}
           height={canvasSize.height}

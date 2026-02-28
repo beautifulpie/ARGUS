@@ -320,7 +320,7 @@ export function SettingsDialog({
                   }`}
                 >
                   <p className="text-sm font-semibold">CPU 전용</p>
-                  <p className="text-xs mt-1 opacity-80">GPU 추론/모니터링을 사용하지 않습니다.</p>
+                  <p className="text-xs mt-1 opacity-80">GPU 추론/모니터링 비활성 + 웹 지도는 CPU 렌더링 힌트를 적용합니다.</p>
                 </button>
                 <button
                   type="button"
