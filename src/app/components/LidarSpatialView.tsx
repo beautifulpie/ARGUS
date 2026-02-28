@@ -1067,6 +1067,19 @@ const removeSejongShortDuplicate = (labels: GeoLabel[]): GeoLabel[] => {
   return labels.filter((label) => normalizeAdminLabelName(label.name) !== '세종시');
 };
 
+const removeSejongCrossLayerDuplicate = (
+  labels: GeoLabel[],
+  higherLevelLabels: GeoLabel[]
+): GeoLabel[] => {
+  const hasSejongSpecialCity = higherLevelLabels.some(
+    (label) => normalizeAdminLabelName(label.name) === '세종특별자치시'
+  );
+  if (!hasSejongSpecialCity) {
+    return labels;
+  }
+  return labels.filter((label) => normalizeAdminLabelName(label.name) !== '세종시');
+};
+
 const extractAdminLabelLayersFromGeoJson = (geoJson: unknown): AdminLabelLayers => {
   const province = new Map<string, { sumLat: number; sumLon: number; count: number }>();
   const district = new Map<string, { sumLat: number; sumLon: number; count: number }>();
@@ -1845,6 +1858,7 @@ export function LidarSpatialView({
 
     const provinceLabels =
       officialProvinceLabels.length > 0 ? officialProvinceLabels : fallbackProvinceLabels;
+    const districtLabels = removeSejongCrossLayerDuplicate(officialDistrictLabels, provinceLabels);
 
     const drawLabelLayer = (
       labels: GeoLabel[],
@@ -1915,7 +1929,7 @@ export function LidarSpatialView({
         overlapY: provinceLabelDistanceY,
         cullOverlap: false,
       });
-      drawLabelLayer(officialDistrictLabels, {
+      drawLabelLayer(districtLabels, {
         enabled: showDistrictLabels,
         minZoom: 9,
         baseDensity: 1,
