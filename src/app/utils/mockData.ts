@@ -480,7 +480,8 @@ export function generateSystemStatus(isLive: boolean, objectCount: number): Syst
     trackedObjects: objectCount,
     activeTracksCount,
     totalDetected: objectIdCounter - 1,
-    sensorStatus: Math.random() > 0.95 ? 'DEGRADED' : 'ONLINE',
+    // Keep mock status stable; DEGRADED should come from actual track-feed condition.
+    sensorStatus: 'ONLINE',
     cpuUsage: 35 + Math.random() * 25, // 35-60%
     gpuUsage: 70 + Math.random() * 20, // 70-90%
     ramUsage: 45 + Math.random() * 20, // 45-65%

@@ -293,6 +293,11 @@ const getDataFrameStrideForMode = (mode: ConsoleSettings['detectionMode']) =>
 const getMockTickIntervalMsForMode = (mode: ConsoleSettings['detectionMode']) =>
   mode === 'SPEED' ? 50 : 50;
 
+const isTrackFeedDegraded = (sensorStatus: SystemStatus['sensorStatus'] | string | undefined) =>
+  String(sensorStatus ?? '')
+    .trim()
+    .toUpperCase() === 'DEGRADED';
+
 type MockLostReason = 'OUT_OF_RANGE' | 'SIGNAL_LOST';
 
 const buildObjectChangeEvents = (
@@ -432,6 +437,7 @@ function App() {
   const selectedObjectGraceTickerRef = useRef<number | null>(null);
   const selectedObjectMissingSinceRef = useRef<number | null>(null);
   const selectedObjectLatestRef = useRef<DetectedObject | null>(null);
+  const bridgeEverConnectedRef = useRef(false);
 
   const clearSelectedObjectGraceTimers = useCallback(() => {
     if (selectedObjectGraceTimeoutRef.current !== null) {
@@ -799,7 +805,14 @@ function App() {
         : clamp((nowMs - previousTickMs) / 1000, 0.01, 2);
     mockTickCounterRef.current += 1;
 
-    if (!shouldSkipDataFrame) {
+    const generatedStatus = adjustStatusForConsoleSettings(
+      generateSystemStatus(true, objectsRef.current.length),
+      settings,
+      true
+    );
+    const degradedTrackFeed = isTrackFeedDegraded(generatedStatus.sensorStatus);
+
+    if (!shouldSkipDataFrame && !degradedTrackFeed) {
       const mockDeltaSeconds = tickDeltaSeconds + mockPendingDeltaRef.current;
       mockPendingDeltaRef.current = 0;
       setObjects((prevObjects) => {
@@ -817,19 +830,16 @@ function App() {
         return nextObjects;
       });
       recordDataUpdateFrame();
+    } else if (!shouldSkipDataFrame && degradedTrackFeed) {
+      dataUpdateTimestampsRef.current = [];
+      setDataUpdateFps(0);
     } else {
       mockPendingDeltaRef.current += tickDeltaSeconds;
     }
 
     setSystemStatus((prev) =>
       mergeRuntimeResources(
-        applyDataUpdateFps(
-          adjustStatusForConsoleSettings(
-            generateSystemStatus(true, prev.trackedObjects),
-            settings,
-            true
-          )
-        ),
+        applyDataUpdateFps(generatedStatus, degradedTrackFeed),
         prev
       )
     );
@@ -889,33 +899,37 @@ function App() {
         if (isDisposed || isFrozenRef.current || !isLiveRef.current) {
           return;
         }
+        bridgeEverConnectedRef.current = true;
+        const tunedFrameStatus = adjustStatusForConsoleSettings(frame.systemStatus, settings, false);
+        const degradedTrackFeed = isTrackFeedDegraded(tunedFrameStatus.sensorStatus);
 
         const frameStride = getDataFrameStrideForMode(settings.detectionMode);
         const shouldSkipDataFrame = mockTickCounterRef.current % frameStride !== 0;
         mockTickCounterRef.current += 1;
 
-        if (shouldSkipDataFrame) {
+        if (shouldSkipDataFrame || degradedTrackFeed) {
+          if (degradedTrackFeed) {
+            dataUpdateTimestampsRef.current = [];
+            setDataUpdateFps(0);
+          }
           setSystemStatus((prev) =>
             mergeRuntimeResources(
-              applyDataUpdateFps(adjustStatusForConsoleSettings(frame.systemStatus, settings, false)),
+              applyDataUpdateFps(tunedFrameStatus, degradedTrackFeed),
               prev
             )
           );
+          if (frame.events.length > 0) {
+            appendEvents(frame.events);
+          }
           argusErrorLoggedRef.current = false;
           return;
         }
 
         if (frame.objects.length === 0) {
-          if (ARGUS_CONFIG.fallbackToMock) {
-            runMockTick();
-            argusErrorLoggedRef.current = false;
-            return;
-          }
-
           if (objectsRef.current.length > 0) {
             setSystemStatus((prev) =>
               mergeRuntimeResources(
-                applyDataUpdateFps(adjustStatusForConsoleSettings(frame.systemStatus, settings, false)),
+                applyDataUpdateFps(tunedFrameStatus),
                 prev
               )
             );
@@ -933,7 +947,7 @@ function App() {
         recordDataUpdateFrame();
         setSystemStatus((prev) =>
           mergeRuntimeResources(
-            applyDataUpdateFps(adjustStatusForConsoleSettings(frame.systemStatus, settings, false)),
+            applyDataUpdateFps(tunedFrameStatus),
             prev
           )
         );
@@ -950,17 +964,21 @@ function App() {
           argusErrorLoggedRef.current = true;
         }
 
-        if (ARGUS_CONFIG.fallbackToMock) {
+        // If bridge has never connected in this live session, keep startup stable with mock fallback.
+        // DEGRADED is reserved for real feed drop after at least one successful connection.
+        if (ARGUS_CONFIG.fallbackToMock && !bridgeEverConnectedRef.current) {
           runMockTick();
-        } else {
-          dataUpdateTimestampsRef.current = [];
-          setDataUpdateFps(0);
-          setSystemStatus((prev) => ({
-            ...applyDataUpdateFps(mergeRuntimeResources(prev, prev), true),
-            connectionStatus: 'DISCONNECTED',
-            sensorStatus: 'DEGRADED',
-          }));
+          return;
         }
+        // In bridge mode, never switch to mock feed on transient comm issues.
+        // Hold current map/UI/objects and mark only track-feed status as degraded.
+        dataUpdateTimestampsRef.current = [];
+        setDataUpdateFps(0);
+        setSystemStatus((prev) => ({
+          ...applyDataUpdateFps(mergeRuntimeResources(prev, prev), true),
+          connectionStatus: 'LIVE',
+          sensorStatus: 'DEGRADED',
+        }));
       } finally {
         isTickRunning = false;
       }
@@ -1026,6 +1044,7 @@ function App() {
       setObjects([]);
       setFrozenSnapshotObjects(null);
       setSelectedObjectId(null);
+      bridgeEverConnectedRef.current = false;
       dataUpdateTimestampsRef.current = [];
       setDataUpdateFps(0);
       setSystemStatus((prev) =>
