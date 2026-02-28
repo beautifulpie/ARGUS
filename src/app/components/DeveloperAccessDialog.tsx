@@ -49,8 +49,8 @@ export function DeveloperAccessDialog({
         }`}
       >
         <h2 className="inline-flex items-center gap-1.5 text-lg font-bold tracking-[0.02em]">
-          <span>Developer Setting</span>
           <Settings className={`h-4 w-4 ${isLightTheme ? 'text-slate-600' : 'text-cyan-300/90'}`} />
+          <span>Developer Setting</span>
         </h2>
         <p className={`mt-1 text-sm ${isLightTheme ? 'text-slate-600' : 'text-slate-400'}`}>
           비인가 된 사용자의 접근을 허용 하지 않습니다.
